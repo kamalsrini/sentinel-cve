@@ -1,0 +1,36 @@
+version: "3.8"
+
+services:
+  sentinel-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - NVD_API_KEY=${NVD_API_KEY:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - TEAMS_WEBHOOK_SECRET=${TEAMS_WEBHOOK_SECRET:-}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - sentinel-server
+    profiles:
+      - with-nginx

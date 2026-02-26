@@ -341,5 +341,61 @@ def cache_clear_cmd() -> None:
     click.echo(f"Cleared {count} cached entries.")
 
 
+@cli.group()
+def server() -> None:
+    """Manage the Sentinel webhook server."""
+
+
+@server.command("start")
+@click.option("--port", default=8080, help="Port to listen on.")
+@click.option("--host", default="0.0.0.0", help="Host to bind to.")
+@click.option("--workers", default=1, help="Number of uvicorn workers.")
+def server_start(port: int, host: str, workers: int) -> None:
+    """Start the Sentinel webhook server."""
+    import uvicorn
+    click.echo(f"🛡️  Starting Sentinel server on {host}:{port} (workers={workers})")
+    uvicorn.run("sentinel.server:app", host=host, port=port, workers=workers)
+
+
+@server.command("status")
+def server_status() -> None:
+    """Check if the Sentinel server is running."""
+    import httpx
+    try:
+        resp = httpx.get("http://localhost:8080/health", timeout=3)
+        if resp.status_code == 200:
+            click.echo("✅ Sentinel server is running.")
+        else:
+            click.echo(f"⚠️  Server responded with status {resp.status_code}")
+    except Exception:
+        click.echo("❌ Sentinel server is not running.")
+
+
+@cli.group()
+def setup() -> None:
+    """Interactive setup guides for integrations."""
+
+
+@setup.command("slack")
+def setup_slack_cmd() -> None:
+    """Walk through Slack app setup."""
+    from sentinel.integrations.setup_guide import setup_slack
+    setup_slack()
+
+
+@setup.command("teams")
+def setup_teams_cmd() -> None:
+    """Walk through Microsoft Teams setup."""
+    from sentinel.integrations.setup_guide import setup_teams
+    setup_teams()
+
+
+@setup.command("telegram")
+def setup_telegram_cmd() -> None:
+    """Walk through Telegram bot setup."""
+    from sentinel.integrations.setup_guide import setup_telegram
+    setup_telegram()
+
+
 if __name__ == "__main__":
     cli()

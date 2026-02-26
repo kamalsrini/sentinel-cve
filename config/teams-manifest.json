@@ -1,0 +1,43 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "0.1.0",
+  "id": "{{MICROSOFT_APP_ID}}",
+  "developer": {
+    "name": "Sentinel",
+    "websiteUrl": "https://github.com/your-org/sentinel",
+    "privacyUrl": "https://github.com/your-org/sentinel/privacy",
+    "termsOfUseUrl": "https://github.com/your-org/sentinel/terms"
+  },
+  "name": {
+    "short": "Sentinel",
+    "full": "Sentinel CVE Explainer"
+  },
+  "description": {
+    "short": "CVE vulnerability briefings powered by Claude",
+    "full": "Get clear, actionable CVE vulnerability briefings in seconds. Fetch data from NVD, OSV.dev, and MITRE, then use Claude to produce a 5-section vulnerability report."
+  },
+  "icons": {
+    "outline": "outline.png",
+    "color": "color.png"
+  },
+  "accentColor": "#0A1929",
+  "bots": [
+    {
+      "botId": "{{MICROSOFT_APP_ID}}",
+      "scopes": ["team", "personal", "groupChat"],
+      "commandLists": [
+        {
+          "scopes": ["team", "personal", "groupChat"],
+          "commands": [
+            {"title": "cve", "description": "Explain a CVE: cve CVE-2024-3094"},
+            {"title": "scan", "description": "Scan a repo: scan <url> --cve CVE-XXXX"},
+            {"title": "help", "description": "Show available commands"}
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["YOUR_DOMAIN"]
+}

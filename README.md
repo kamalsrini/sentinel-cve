@@ -73,3 +73,99 @@ sentinel config set nvd-key <key>
 sentinel config set model <model-name>
 sentinel config get api-key
 ```
+
+## 🌐 Webhook Server & Integrations
+
+Sentinel includes a FastAPI server that accepts commands from Slack, Microsoft Teams, Telegram, and a generic REST API.
+
+### Start the Server
+
+```bash
+sentinel server start                    # Default port 8080
+sentinel server start --port 9090        # Custom port
+sentinel server start --workers 4        # Multiple workers
+sentinel server status                   # Check if running
+```
+
+### REST API
+
+```bash
+# Explain a CVE
+curl -X POST http://localhost:8080/api/cve \
+  -H "Content-Type: application/json" \
+  -d '{"cve_id": "CVE-2024-3094"}'
+
+# Scan a repo
+curl -X POST http://localhost:8080/api/scan \
+  -H "Content-Type: application/json" \
+  -d '{"repo_url": "https://github.com/user/repo", "cve_id": "CVE-2024-3094"}'
+
+# Health check
+curl http://localhost:8080/health
+```
+
+### Slack Integration
+
+```bash
+sentinel setup slack   # Interactive setup guide
+```
+
+1. Create a Slack app using `config/slack-manifest.yml`
+2. Set environment variables:
+   ```bash
+   export SLACK_SIGNING_SECRET=<signing-secret>
+   export SLACK_BOT_TOKEN=xoxb-<bot-token>
+   ```
+3. Set slash command URL to `https://<your-domain>/slack/commands`
+4. Set events URL to `https://<your-domain>/slack/events`
+5. Use: `/sentinel cve CVE-2024-3094` or `@Sentinel cve CVE-2024-3094`
+
+### Microsoft Teams Integration
+
+```bash
+sentinel setup teams   # Interactive setup guide
+```
+
+1. Create an outgoing webhook in your Teams channel pointing to `https://<your-domain>/teams/webhook`
+2. Set environment variables:
+   ```bash
+   export TEAMS_WEBHOOK_SECRET=<base64-hmac-secret>
+   ```
+3. Mention the bot: `@Sentinel cve CVE-2024-3094`
+
+### Telegram Integration
+
+```bash
+sentinel setup telegram   # Interactive setup guide
+```
+
+1. Create a bot via @BotFather
+2. Set environment variables:
+   ```bash
+   export TELEGRAM_BOT_TOKEN=<bot-token>
+   ```
+3. Set webhook: `curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d '{"url":"https://<YOUR_DOMAIN>/telegram/webhook"}'`
+4. Send commands: `/cve CVE-2024-3094`, `/scan <repo> --cve CVE-XXXX`
+
+### Docker Deployment
+
+```bash
+cd docker/
+# Set env vars in .env file or export them
+docker compose up -d
+
+# With nginx reverse proxy:
+docker compose --profile with-nginx up -d
+```
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Health check |
+| `/api/cve` | POST | REST API — explain a CVE |
+| `/api/scan` | POST | REST API — scan a repo |
+| `/slack/commands` | POST | Slack slash commands |
+| `/slack/events` | POST | Slack Events API |
+| `/teams/webhook` | POST | Teams outgoing webhook |
+| `/telegram/webhook` | POST | Telegram bot webhook |

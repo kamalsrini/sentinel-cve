@@ -1,0 +1,33 @@
+display_information:
+  name: Sentinel CVE Explainer
+  description: Get clear, actionable CVE vulnerability briefings powered by Claude.
+  background_color: "#0A1929"
+
+features:
+  bot_user:
+    display_name: Sentinel
+    always_online: true
+  slash_commands:
+    - command: /sentinel
+      url: https://YOUR_DOMAIN/slack/commands
+      description: Explain a CVE or scan a repo for vulnerabilities
+      usage_hint: "cve CVE-2024-3094 | scan <repo-url> --cve CVE-XXXX | help"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - commands
+      - app_mentions:read
+
+settings:
+  event_subscriptions:
+    request_url: https://YOUR_DOMAIN/slack/events
+    bot_events:
+      - app_mention
+  interactivity:
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
