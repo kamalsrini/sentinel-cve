@@ -1,5 +1,9 @@
+*.pyc
 __pycache__/
 *.egg-info/
-*.pyc
-.sentinel/
-securitysubstack/
+dist/
+build/
+.eggs/
+~/.sentinel/
+.venv/
+.env
