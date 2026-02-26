@@ -88,6 +88,175 @@ def render_json(
     return json.dumps(output, indent=2, ensure_ascii=False)
 
 
+## Scan rendering ##
+
+VERDICT_STYLES = {
+    "AFFECTED": ("🚨 AFFECTED", "bold red"),
+    "NOT_AFFECTED": ("✅ NOT AFFECTED", "bold green"),
+    "UNKNOWN": ("⚠️  UNKNOWN", "bold yellow"),
+    "POTENTIALLY_AFFECTED": ("⚠️  POTENTIALLY AFFECTED", "bold yellow"),
+}
+
+
+def render_scan_terminal(
+    scan_result: Any,
+    path_or_url: str,
+    cve_id: str | None = None,
+    no_color: bool = False,
+) -> None:
+    """Render scan results to terminal using rich."""
+    from rich.table import Table
+
+    console = Console(no_color=no_color)
+    console.print()
+
+    # Header
+    title = f"🛡️  SENTINEL SCAN — {path_or_url}"
+    subtitle = f"Checking: {cve_id}" if cve_id else "Full vulnerability scan"
+    console.print(Panel(
+        Text(subtitle, style="dim"),
+        title=title,
+        border_style="bold cyan",
+    ))
+
+    # Project info
+    if scan_result.project_types:
+        console.print(f"  Project type: {', '.join(scan_result.project_types)}")
+    console.print(f"  Dependencies found: {scan_result.total_deps}")
+    console.print()
+
+    if cve_id:
+        # Single CVE mode
+        label, style = VERDICT_STYLES.get(scan_result.status, ("❓ UNKNOWN", "bold"))
+        console.print(f"  [{style}]{label}[/{style}]")
+        console.print()
+
+        if scan_result.details:
+            table = Table(show_header=True, header_style="bold")
+            table.add_column("Dependency")
+            table.add_column("Your Version")
+            table.add_column("Affected Range")
+            table.add_column("Fix Version")
+            table.add_column("Status")
+            for d in scan_result.details:
+                status = d.get("status", "")
+                st = {"AFFECTED": "red", "NOT_AFFECTED": "green", "UNKNOWN": "yellow"}.get(status, "")
+                table.add_row(
+                    d.get("dependency", ""),
+                    d.get("your_version", ""),
+                    d.get("affected_range", ""),
+                    d.get("fix_version", ""),
+                    f"[{st}]{status}[/{st}]" if st else status,
+                )
+            console.print(table)
+    else:
+        # Full scan mode
+        vulns = scan_result.vulnerabilities
+        if not vulns:
+            console.print("  [bold green]✅ No known vulnerabilities found![/bold green]")
+        else:
+            console.print(f"  Found [bold red]{len(vulns)}[/bold red] vulnerabilities:")
+            console.print()
+
+            # Group by severity
+            by_severity: dict[str, list] = {}
+            for v in vulns:
+                sev = v.get("severity", "UNKNOWN")
+                by_severity.setdefault(sev, []).append(v)
+
+            severity_colors = {
+                "CRITICAL": "bold red",
+                "HIGH": "red",
+                "MEDIUM": "yellow",
+                "LOW": "green",
+                "UNKNOWN": "dim",
+            }
+
+            for sev in ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]:
+                group = by_severity.get(sev, [])
+                if not group:
+                    continue
+                color = severity_colors.get(sev, "")
+                console.print(f"  [{color}]{sev} ({len(group)})[/{color}]")
+                table = Table(show_header=True, header_style="bold")
+                table.add_column("CVE")
+                table.add_column("Package")
+                table.add_column("Your Version")
+                table.add_column("Fix")
+                for v in group:
+                    table.add_row(
+                        v.get("cve_id", ""),
+                        v.get("package", ""),
+                        v.get("your_version", ""),
+                        v.get("fix_version", ""),
+                    )
+                console.print(table)
+                console.print()
+
+        console.print("  Run [bold]sentinel cve <CVE-ID>[/bold] for details.")
+    console.print()
+
+
+def render_scan_json(scan_result: Any, cve_id: str | None = None) -> str:
+    """Render scan results as JSON."""
+    output = scan_result.to_dict()
+    if cve_id:
+        output["cve_id"] = cve_id
+    # Remove non-serializable Dependency objects from output
+    output.pop("dependencies", None)
+    return json.dumps(output, indent=2, ensure_ascii=False, default=str)
+
+
+def render_scan_markdown(scan_result: Any, path_or_url: str, cve_id: str | None = None) -> str:
+    """Render scan results as markdown."""
+    lines = [f"# Sentinel Scan — {path_or_url}", ""]
+
+    if cve_id:
+        label = VERDICT_STYLES.get(scan_result.status, ("UNKNOWN",))[0]
+        lines.append(f"**{label}** for {cve_id}")
+        lines.append("")
+        if scan_result.details:
+            lines.append("| Dependency | Your Version | Affected Range | Fix Version | Status |")
+            lines.append("|---|---|---|---|---|")
+            for d in scan_result.details:
+                lines.append(f"| {d.get('dependency','')} | {d.get('your_version','')} | {d.get('affected_range','')} | {d.get('fix_version','')} | {d.get('status','')} |")
+    else:
+        vulns = scan_result.vulnerabilities
+        lines.append(f"Found **{len(vulns)}** vulnerabilities in {scan_result.total_deps} dependencies.")
+        lines.append("")
+        if vulns:
+            lines.append("| CVE | Severity | Package | Your Version | Fix |")
+            lines.append("|---|---|---|---|---|")
+            for v in vulns:
+                lines.append(f"| {v.get('cve_id','')} | {v.get('severity','')} | {v.get('package','')} | {v.get('your_version','')} | {v.get('fix_version','')} |")
+
+    return "\n".join(lines) + "\n"
+
+
+def render_deep_scan_terminal(
+    deep_result: Any,
+    no_color: bool = False,
+) -> None:
+    """Render deep scan results."""
+    console = Console(no_color=no_color)
+    label, style = VERDICT_STYLES.get(deep_result.status, ("❓ UNKNOWN", "bold"))
+    console.print(f"\n  [{style}]{label}[/{style}]")
+    console.print()
+
+    if deep_result.usages:
+        console.print(f"  Code analysis found {len(deep_result.usages)} usage(s):")
+        for u in deep_result.usages[:5]:
+            console.print(f"    • {u.file}:{u.line} — {u.import_statement}")
+        console.print()
+
+    console.print(Panel(
+        Markdown(deep_result.analysis),
+        title="Claude Code-Path Analysis",
+        border_style="bold cyan",
+    ))
+    console.print()
+
+
 def render_markdown(
     cve_id: str,
     analysis: dict[str, Any],

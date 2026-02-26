@@ -15,6 +15,7 @@ dependencies = [
     "anthropic>=0.39",
     "aiohttp>=3.9",
     "aiosqlite>=0.19",
+    "packaging>=23.0",
 ]
 
 [project.scripts]

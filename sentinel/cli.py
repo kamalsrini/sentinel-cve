@@ -163,6 +163,130 @@ async def _run_cve(
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("path_or_url")
+@click.option("--cve", "cve_id", default=None, help="Check a specific CVE against the repo.")
+@click.option("--deep", is_flag=True, help="Enable Claude code-path analysis.")
+@click.option("--local", is_flag=True, help="Dependency-only mode, no code sent to API.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
+@click.pass_context
+def scan(
+    ctx: click.Context,
+    path_or_url: str,
+    cve_id: str | None,
+    deep: bool,
+    local: bool,
+    output_json: bool,
+) -> None:
+    """Scan a repo for vulnerabilities.
+
+    \b
+    Examples:
+        sentinel scan .
+        sentinel scan . --cve CVE-2024-3094
+        sentinel scan https://github.com/user/repo --deep
+        sentinel scan . --json
+    """
+    if cve_id:
+        cve_id = cve_id.upper()
+        if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id):
+            raise click.BadParameter(f"'{cve_id}' is not a valid CVE ID.")
+
+    asyncio.run(_run_scan(ctx, path_or_url, cve_id, deep, local, output_json))
+
+
+async def _run_scan(
+    ctx: click.Context,
+    path_or_url: str,
+    cve_id: str | None,
+    deep: bool,
+    local: bool,
+    output_json: bool,
+) -> None:
+    """Async implementation of the scan command."""
+    from rich.console import Console
+
+    from sentinel.scanner import scan_repo
+    from sentinel.renderer import (
+        render_scan_terminal,
+        render_scan_json,
+        render_deep_scan_terminal,
+    )
+
+    no_cache = ctx.obj.get("no_cache", False)
+    no_color = ctx.obj.get("no_color", False)
+    quiet = ctx.obj.get("quiet", False)
+    console = Console(no_color=no_color, stderr=True)
+
+    try:
+        if not quiet:
+            console.print(f"[bold cyan]Scanning {path_or_url}...[/bold cyan]", highlight=False)
+
+        result = await scan_repo(path_or_url, cve_id=cve_id, no_cache=no_cache)
+
+        # Deep scan if requested and affected
+        if deep and not local and cve_id and result.affected and result.details:
+            from sentinel.deep_scan import deep_scan
+            from sentinel.scanner import is_github_url, clone_repo
+            import shutil
+
+            scan_path = path_or_url
+            tmp_dir = None
+            if is_github_url(path_or_url):
+                tmp_dir = clone_repo(path_or_url)
+                scan_path = tmp_dir
+
+            try:
+                # Pick the first affected dependency
+                affected_detail = next(
+                    (d for d in result.details if d.get("status") == "AFFECTED"), None
+                )
+                if affected_detail:
+                    if not quiet:
+                        console.print("[bold cyan]Running deep code-path analysis...[/bold cyan]")
+                    deep_result = await deep_scan(
+                        repo_path=scan_path,
+                        dep_name=affected_detail["dependency"],
+                        dep_version=affected_detail["your_version"],
+                        ecosystem=affected_detail["ecosystem"],
+                        cve_id=cve_id,
+                    )
+                    if output_json:
+                        import json as _json
+                        click.echo(_json.dumps({
+                            "scan": result.to_dict(),
+                            "deep_analysis": {
+                                "status": deep_result.status,
+                                "verdict": deep_result.verdict,
+                                "usages": len(deep_result.usages),
+                                "analysis": deep_result.analysis,
+                            },
+                        }, indent=2, default=str))
+                    else:
+                        render_scan_terminal(result, path_or_url, cve_id, no_color)
+                        render_deep_scan_terminal(deep_result, no_color)
+                    return
+            finally:
+                if tmp_dir:
+                    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+        # Standard output
+        if output_json:
+            click.echo(render_scan_json(result, cve_id))
+        else:
+            render_scan_terminal(result, path_or_url, cve_id, no_color)
+
+    except ValueError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if ctx.obj.get("verbose"):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
 @cli.group()
 def config() -> None:
     """Manage Sentinel configuration."""

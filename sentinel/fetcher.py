@@ -111,6 +111,137 @@ async def fetch_cve_data(cve_id: str) -> dict[str, Any]:
     }
 
 
+async def batch_query_osv(dependencies: list[Any]) -> list[dict[str, Any]]:
+    """Query OSV.dev batch API for all dependencies at once.
+
+    Args:
+        dependencies: List of Dependency objects (with name, version, ecosystem).
+
+    Returns:
+        List of vulnerability dicts, each with cve_id, package, version, severity, etc.
+    """
+    # Build batch query payload
+    queries = []
+    dep_map: dict[int, Any] = {}
+    for i, dep in enumerate(dependencies):
+        eco = dep.ecosystem
+        # Map our ecosystem names to OSV ecosystem names
+        osv_eco = eco  # OSV uses same names mostly
+        q: dict[str, Any] = {"package": {"name": dep.name, "ecosystem": osv_eco}}
+        if dep.version and dep.version != "*":
+            q["version"] = dep.version
+        queries.append(q)
+        dep_map[i] = dep
+
+    if not queries:
+        return []
+
+    vulnerabilities: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    # OSV batch API has a limit, chunk into groups of 1000
+    chunk_size = 1000
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as session:
+        for start in range(0, len(queries), chunk_size):
+            chunk = queries[start:start + chunk_size]
+            try:
+                async with session.post(
+                    "https://api.osv.dev/v1/querybatch",
+                    json={"queries": chunk},
+                ) as resp:
+                    if resp.status != 200:
+                        logger.warning("OSV batch query returned status %d", resp.status)
+                        continue
+                    data = await resp.json()
+                    results = data.get("results", [])
+
+                    for idx, result in enumerate(results):
+                        vulns = result.get("vulns", [])
+                        dep = dep_map.get(start + idx)
+                        for vuln in vulns:
+                            vuln_id = vuln.get("id", "")
+                            if vuln_id in seen_ids:
+                                continue
+                            seen_ids.add(vuln_id)
+
+                            # Extract severity
+                            severity = "UNKNOWN"
+                            severity_list = vuln.get("severity", [])
+                            if severity_list:
+                                score_str = severity_list[0].get("score", "")
+                                severity = _cvss_to_severity(score_str)
+
+                            # Find fix version for this specific package
+                            fix_version = "unknown"
+                            affected_range = "unknown"
+                            for affected in vuln.get("affected", []):
+                                pkg = affected.get("package", {})
+                                if pkg.get("name", "").lower() == (dep.name if dep else "").lower():
+                                    for rng in affected.get("ranges", []):
+                                        events = rng.get("events", [])
+                                        for evt in events:
+                                            if "fixed" in evt:
+                                                fix_version = evt["fixed"]
+                                        parts = []
+                                        for evt in events:
+                                            if "introduced" in evt:
+                                                parts.append(f">= {evt['introduced']}")
+                                            if "fixed" in evt:
+                                                parts.append(f"< {evt['fixed']}")
+                                        affected_range = ", ".join(parts) if parts else "unknown"
+
+                            vulnerabilities.append({
+                                "cve_id": vuln_id,
+                                "summary": vuln.get("summary", ""),
+                                "severity": severity,
+                                "package": dep.name if dep else "",
+                                "your_version": dep.version if dep else "",
+                                "ecosystem": dep.ecosystem if dep else "",
+                                "fix_version": fix_version,
+                                "affected_range": affected_range,
+                            })
+            except Exception as exc:
+                logger.warning("OSV batch query failed: %s", exc)
+
+    # Sort by severity
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "UNKNOWN": 4}
+    vulnerabilities.sort(key=lambda v: severity_order.get(v["severity"], 4))
+
+    return vulnerabilities
+
+
+def _cvss_to_severity(score_str: str) -> str:
+    """Convert a CVSS vector string to a severity label."""
+    # Try to extract numeric score
+    import re as _re
+    match = _re.search(r"CVSS:\d+\.\d+/.*?", score_str)
+    # Try to get base score from the end
+    parts = score_str.split("/")
+    try:
+        # Try parsing as a float directly
+        score = float(score_str)
+    except (ValueError, TypeError):
+        # Try extracting from CVSS vector
+        for part in reversed(parts):
+            try:
+                score = float(part)
+                break
+            except ValueError:
+                continue
+        else:
+            return "UNKNOWN"
+
+    if score >= 9.0:
+        return "CRITICAL"
+    if score >= 7.0:
+        return "HIGH"
+    if score >= 4.0:
+        return "MEDIUM"
+    if score > 0:
+        return "LOW"
+    return "UNKNOWN"
+
+
 def _build_context(cve_id: str, sources: dict[str, Any]) -> str:
     """Build a structured text document from all fetched data for Claude."""
     parts: list[str] = [f"CVE ID: {cve_id}\n"]
