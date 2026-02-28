@@ -106,6 +106,35 @@ Infrastructure-focused with containers, K8s, CI/CD, and monitoring:
 | 📊 **Monitoring & Detection** | Logs, alerts, exploitation detection |
 | 🚨 **Incident Response Steps** | Step-by-step if actively exploited |
 
+## Mobile SDK Scanning
+
+Sentinel detects dependencies in mobile app build configs that standard scanners miss:
+
+| Ecosystem | Files Parsed | Lock File (preferred) |
+|---|---|---|
+| **Android (Gradle)** | `build.gradle`, `build.gradle.kts`, `gradle/libs.versions.toml` | — |
+| **iOS (CocoaPods)** | `Podfile` | `Podfile.lock` |
+| **iOS (Swift PM)** | `Package.swift` | `Package.resolved` |
+| **Flutter (Dart)** | `pubspec.yaml` | `pubspec.lock` |
+
+```bash
+# Scan an Android project
+sentinel scan ./my-android-app --cve CVE-2024-XXXX
+
+# Scan an iOS project
+sentinel scan ./my-ios-app --cve CVE-2024-XXXX
+
+# Scan a Flutter project
+sentinel scan ./my-flutter-app
+```
+
+Features:
+- Resolves Gradle variable references (`$firebaseBomVersion`) from `gradle.properties` and `ext {}` blocks
+- Parses Gradle version catalogs (`libs.versions.toml`)
+- Handles CocoaPods subspecs (`Firebase/Analytics`)
+- Prefers lock files over manifests for accurate resolved versions
+- Supports both Groovy and Kotlin DSL Gradle files
+
 ## K8s Runtime BOM Scanner
 
 Scan your Kubernetes cluster for vulnerable container images:

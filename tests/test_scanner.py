@@ -22,6 +22,14 @@ from sentinel.scanner import (
     _parse_cargo_lock,
     _parse_gemfile_lock,
     _parse_composer_lock,
+    _parse_build_gradle,
+    _parse_gradle_version_catalog,
+    _parse_podfile,
+    _parse_podfile_lock,
+    _parse_package_swift,
+    _parse_package_resolved,
+    _parse_pubspec_yaml,
+    _parse_pubspec_lock,
     _version_in_range,
     _names_match,
 )
@@ -301,3 +309,302 @@ class TestCheckCveImpact:
         cve_data = {"sources": {"nvd": {}}}
         result = check_cve_impact(deps, cve_data)
         assert result.status == "UNKNOWN"
+
+
+class TestDetectMobileProjectTypes:
+    def test_detects_android(self, tmp_repo: Path) -> None:
+        (tmp_repo / "build.gradle").write_text("apply plugin: 'com.android.application'")
+        result = detect_project_type(tmp_repo)
+        assert "Maven" in result
+
+    def test_detects_ios_cocoapods(self, tmp_repo: Path) -> None:
+        (tmp_repo / "Podfile").write_text("pod 'Firebase'")
+        result = detect_project_type(tmp_repo)
+        assert "CocoaPods" in result
+
+    def test_detects_ios_spm(self, tmp_repo: Path) -> None:
+        (tmp_repo / "Package.resolved").write_text('{"pins": []}')
+        result = detect_project_type(tmp_repo)
+        assert "SwiftPM" in result
+
+    def test_detects_flutter(self, tmp_repo: Path) -> None:
+        (tmp_repo / "pubspec.yaml").write_text("name: myapp")
+        result = detect_project_type(tmp_repo)
+        assert "Pub" in result
+
+    def test_detects_gradle_version_catalog(self, tmp_repo: Path) -> None:
+        gradle_dir = tmp_repo / "gradle"
+        gradle_dir.mkdir()
+        (gradle_dir / "libs.versions.toml").write_text("[versions]\n")
+        result = detect_project_type(tmp_repo)
+        assert "Maven" in result
+
+
+class TestBuildGradleParser:
+    def test_parse_groovy_single_quotes(self, tmp_repo: Path) -> None:
+        gradle = tmp_repo / "build.gradle"
+        gradle.write_text("""
+dependencies {
+    implementation 'com.google.firebase:firebase-analytics:21.5.0'
+    implementation "com.adjust.sdk:adjust-android:4.38.1"
+    api 'com.facebook.android:facebook-android-sdk:16.3.0'
+    testImplementation 'junit:junit:4.13.2'
+}
+""")
+        deps = _parse_build_gradle(gradle, tmp_repo)
+        assert len(deps) == 4
+        names = {d.name for d in deps}
+        assert "com.google.firebase:firebase-analytics" in names
+        assert "com.adjust.sdk:adjust-android" in names
+        assert "com.facebook.android:facebook-android-sdk" in names
+        assert deps[0].ecosystem == "Maven"
+
+    def test_parse_kotlin_dsl(self, tmp_repo: Path) -> None:
+        gradle = tmp_repo / "build.gradle.kts"
+        gradle.write_text("""
+dependencies {
+    implementation("com.google.firebase:firebase-analytics:21.5.0")
+    implementation("com.adjust.sdk:adjust-android:4.38.1")
+}
+""")
+        deps = _parse_build_gradle(gradle, tmp_repo)
+        assert len(deps) == 2
+
+    def test_variable_resolution_from_ext(self, tmp_repo: Path) -> None:
+        gradle = tmp_repo / "build.gradle"
+        gradle.write_text("""
+ext {
+    def firebaseBomVersion = "32.7.0"
+}
+dependencies {
+    implementation "com.google.firebase:firebase-bom:$firebaseBomVersion"
+}
+""")
+        deps = _parse_build_gradle(gradle, tmp_repo)
+        assert len(deps) == 1
+        assert deps[0].version == "32.7.0"
+
+    def test_variable_resolution_from_gradle_properties(self, tmp_repo: Path) -> None:
+        (tmp_repo / "gradle.properties").write_text("adjustVersion=4.38.1\n")
+        gradle = tmp_repo / "build.gradle"
+        gradle.write_text("""
+dependencies {
+    implementation "com.adjust.sdk:adjust-android:$adjustVersion"
+}
+""")
+        deps = _parse_build_gradle(gradle, tmp_repo)
+        assert len(deps) == 1
+        assert deps[0].version == "4.38.1"
+
+    def test_buildscript_classpath(self, tmp_repo: Path) -> None:
+        gradle = tmp_repo / "build.gradle"
+        gradle.write_text("""
+buildscript {
+    dependencies {
+        classpath 'com.google.gms:google-services:4.4.0'
+    }
+}
+""")
+        deps = _parse_build_gradle(gradle, tmp_repo)
+        assert len(deps) == 1
+        assert deps[0].name == "com.google.gms:google-services"
+
+
+class TestGradleVersionCatalog:
+    def test_parse_version_catalog(self, tmp_repo: Path) -> None:
+        catalog = tmp_repo / "libs.versions.toml"
+        catalog.write_text("""
+[versions]
+firebase-bom = "32.7.0"
+adjust = "4.38.1"
+
+[libraries]
+firebase-analytics = { module = "com.google.firebase:firebase-analytics", version.ref = "firebase-bom" }
+adjust-android = { module = "com.adjust.sdk:adjust-android", version.ref = "adjust" }
+
+[plugins]
+android-application = { id = "com.android.application", version = "8.2.0" }
+""")
+        deps = _parse_gradle_version_catalog(catalog)
+        assert len(deps) >= 2
+        fb = [d for d in deps if "firebase-analytics" in d.name]
+        assert len(fb) == 1
+        assert fb[0].version == "32.7.0"
+        adj = [d for d in deps if "adjust-android" in d.name]
+        assert len(adj) == 1
+        assert adj[0].version == "4.38.1"
+
+
+class TestPodfileParsers:
+    def test_parse_podfile(self) -> None:
+        text = """
+target 'MyApp' do
+  pod 'Firebase/Analytics', '~> 10.0'
+  pod 'Adjust', '4.37.0'
+  pod 'FBSDKCoreKit', '~> 16.0'
+  pod 'Alamofire'
+end
+"""
+        deps = _parse_podfile(text, "Podfile")
+        assert len(deps) == 4
+        assert deps[0].name == "Firebase/Analytics"
+        assert deps[0].version == "10.0"
+        assert deps[0].ecosystem == "CocoaPods"
+        assert deps[1].version == "4.37.0"
+        assert deps[3].version == "*"
+
+    def test_parse_podfile_lock(self) -> None:
+        text = """PODS:
+  - Adjust (4.37.0)
+  - Firebase/Analytics (10.21.0):
+    - Firebase/Core
+    - FirebaseAnalytics (~> 10.21.0)
+  - Firebase/Core (10.21.0):
+    - FirebaseCore (= 10.21.0)
+  - FBSDKCoreKit (16.3.1)
+
+DEPENDENCIES:
+  - Adjust (= 4.37.0)
+
+SPEC REPOS:
+  trunk:
+    - Adjust
+"""
+        deps = _parse_podfile_lock(text, "Podfile.lock")
+        assert len(deps) >= 3
+        adj = [d for d in deps if d.name == "Adjust"]
+        assert len(adj) == 1
+        assert adj[0].version == "4.37.0"
+        fb = [d for d in deps if d.name == "Firebase/Analytics"]
+        assert len(fb) == 1
+        assert fb[0].version == "10.21.0"
+
+
+class TestSwiftPMParsers:
+    def test_parse_package_swift(self) -> None:
+        text = """
+let package = Package(
+    name: "MyApp",
+    dependencies: [
+        .package(url: "https://github.com/firebase/firebase-ios-sdk.git", from: "10.21.0"),
+        .package(url: "https://github.com/adjust/ios_sdk", exact: "4.37.0"),
+        .package(url: "https://github.com/Alamofire/Alamofire.git", .upToNextMajor(from: "5.8.0")),
+    ]
+)
+"""
+        deps = _parse_package_swift(text, "Package.swift")
+        assert len(deps) == 3
+        assert deps[0].name == "firebase-ios-sdk"
+        assert deps[0].version == "10.21.0"
+        assert deps[0].ecosystem == "SwiftPM"
+        assert deps[1].name == "ios_sdk"
+        assert deps[1].version == "4.37.0"
+        assert deps[2].version == "5.8.0"
+
+    def test_parse_package_resolved_v2(self) -> None:
+        text = json.dumps({
+            "pins": [
+                {
+                    "identity": "firebase-ios-sdk",
+                    "state": {"version": "10.21.0"},
+                },
+                {
+                    "identity": "alamofire",
+                    "state": {"version": "5.8.1"},
+                },
+            ]
+        })
+        deps = _parse_package_resolved(text, "Package.resolved")
+        assert len(deps) == 2
+        assert deps[0].name == "firebase-ios-sdk"
+        assert deps[0].version == "10.21.0"
+        assert deps[0].ecosystem == "SwiftPM"
+
+    def test_parse_package_resolved_v1(self) -> None:
+        text = json.dumps({
+            "object": {
+                "pins": [
+                    {"package": "Alamofire", "state": {"version": "5.8.1"}},
+                ]
+            }
+        })
+        deps = _parse_package_resolved(text, "Package.resolved")
+        assert len(deps) == 1
+        assert deps[0].name == "Alamofire"
+
+
+class TestPubspecParsers:
+    def test_parse_pubspec_lock(self) -> None:
+        text = """
+packages:
+  firebase_core:
+    dependency: "direct main"
+    version: "2.24.2"
+  cupertino_icons:
+    dependency: "direct main"
+    version: "1.0.6"
+  collection:
+    dependency: transitive
+    version: "1.18.0"
+"""
+        deps = _parse_pubspec_lock(text, "pubspec.lock")
+        assert len(deps) == 3
+        fb = [d for d in deps if d.name == "firebase_core"]
+        assert len(fb) == 1
+        assert fb[0].version == "2.24.2"
+        assert fb[0].ecosystem == "Pub"
+
+    def test_parse_pubspec_yaml(self) -> None:
+        text = """
+name: my_app
+dependencies:
+  firebase_core: ^2.24.2
+  cupertino_icons: ^1.0.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+"""
+        deps = _parse_pubspec_yaml(text, "pubspec.yaml")
+        assert len(deps) >= 2
+        fb = [d for d in deps if d.name == "firebase_core"]
+        assert len(fb) == 1
+        assert fb[0].version == "2.24.2"
+        assert fb[0].ecosystem == "Pub"
+
+
+class TestMobileExtractDependencies:
+    def test_extract_from_podfile_lock(self, tmp_repo: Path) -> None:
+        (tmp_repo / "Podfile").write_text("pod 'Firebase', '~> 10.0'")
+        (tmp_repo / "Podfile.lock").write_text("""PODS:
+  - Firebase/CoreOnly (10.21.0):
+    - FirebaseCore (= 10.21.0)
+
+DEPENDENCIES:
+  - Firebase (~> 10.0)
+""")
+        deps = extract_dependencies(tmp_repo)
+        assert len(deps) >= 1
+        assert all(d.ecosystem == "CocoaPods" for d in deps)
+
+    def test_extract_from_package_resolved(self, tmp_repo: Path) -> None:
+        (tmp_repo / "Package.resolved").write_text(json.dumps({
+            "pins": [
+                {"identity": "alamofire", "state": {"version": "5.8.1"}},
+            ]
+        }))
+        deps = extract_dependencies(tmp_repo)
+        assert len(deps) == 1
+        assert deps[0].ecosystem == "SwiftPM"
+
+    def test_extract_prefers_podfile_lock_over_podfile(self, tmp_repo: Path) -> None:
+        (tmp_repo / "Podfile").write_text("pod 'Firebase', '~> 10.0'")
+        (tmp_repo / "Podfile.lock").write_text("""PODS:
+  - Firebase/CoreOnly (10.21.0)
+
+DEPENDENCIES:
+  - Firebase (~> 10.0)
+""")
+        deps = extract_dependencies(tmp_repo)
+        # Should use lockfile version (10.21.0), not manifest (~> 10.0 → 10.0)
+        assert any(d.version == "10.21.0" for d in deps)

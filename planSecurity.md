@@ -914,6 +914,30 @@ Written to `~/.sentinel/audit.log` in JSON-lines format.
 
 ---
 
+## Phase 6: Mobile SDK Dependency Scanning (Community Feedback)
+
+### Motivation
+Standard dependency scanning misses mobile SDKs that ship via Gradle (Android), CocoaPods/SPM (iOS), and Pub (Flutter). These hide in build configs, not standard package manifests. Community feedback highlighted this as a blind spot — Firebase, Adjust, Facebook SDK, Google Analytics, Crashlytics, AppsFlyer, Braze, and Amplitude are commonly missed.
+
+### Supported Ecosystems
+
+| Platform | Files | Ecosystem |
+|---|---|---|
+| Android (Gradle) | `build.gradle`, `build.gradle.kts`, `gradle/libs.versions.toml` | Maven |
+| iOS (CocoaPods) | `Podfile`, `Podfile.lock` | CocoaPods |
+| iOS (Swift PM) | `Package.swift`, `Package.resolved` | SwiftPM |
+| Flutter (Dart) | `pubspec.yaml`, `pubspec.lock` | Pub |
+
+### Key Implementation Details
+- Regex-based Gradle parsing (Groovy + Kotlin DSL) — doesn't try to evaluate Groovy
+- Variable resolution from `gradle.properties` and `ext {}` blocks
+- Gradle version catalog (`libs.versions.toml`) with `[versions]`, `[libraries]`, `[plugins]`
+- CocoaPods subspec support (`Firebase/Analytics`)
+- Lock file preference: `Podfile.lock > Podfile`, `Package.resolved > Package.swift`, `pubspec.lock > pubspec.yaml`
+- Fallback regex parsers when YAML/TOML libraries unavailable
+
+---
+
 ## Appendix: Quick Start (Post-Implementation)
 
 ```bash
