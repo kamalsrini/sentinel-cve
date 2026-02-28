@@ -306,6 +306,152 @@ def render_deep_scan_terminal(
     console.print()
 
 
+## K8s scan rendering ##
+
+def render_k8s_scan_terminal(
+    result: Any,
+    no_color: bool = False,
+) -> None:
+    """Render K8s scan results to terminal."""
+    from rich.table import Table
+
+    console = Console(no_color=no_color)
+    console.print()
+
+    title = "🛡️  SENTINEL K8s SCAN"
+    subtitle_parts = []
+    if result.namespace:
+        subtitle_parts.append(f"Namespace: {result.namespace}")
+    else:
+        subtitle_parts.append("All namespaces")
+    if result.cve_id:
+        subtitle_parts.append(f"CVE: {result.cve_id}")
+    console.print(Panel(
+        Text(" │ ".join(subtitle_parts), style="dim"),
+        title=title,
+        border_style="bold cyan",
+    ))
+
+    if result.errors:
+        for err in result.errors:
+            console.print(f"  [bold red]Error:[/bold red] {err}")
+        console.print()
+
+    if not result.scan_results:
+        console.print("  No images found to scan.")
+        console.print()
+        return
+
+    # Group images by namespace
+    by_ns: dict[str, list] = {}
+    for img in result.images:
+        by_ns.setdefault(img.namespace or "unknown", []).append(img)
+
+    console.print(f"  Images scanned: {len(result.scan_results)}")
+    total_vulns = sum(len(r.vulnerabilities) for r in result.scan_results)
+    if total_vulns > 0:
+        console.print(f"  [bold red]Vulnerabilities found: {total_vulns}[/bold red]")
+    else:
+        console.print("  [bold green]No vulnerabilities found![/bold green]")
+    console.print()
+
+    for scan_res in result.scan_results:
+        if not scan_res.vulnerabilities and not scan_res.error:
+            continue
+        console.print(f"  [bold]{scan_res.image}[/bold]")
+        if scan_res.error:
+            console.print(f"    [red]Error: {scan_res.error}[/red]")
+        if scan_res.vulnerabilities:
+            table = Table(show_header=True, header_style="bold", padding=(0, 1))
+            table.add_column("Package")
+            table.add_column("Version")
+            table.add_column("Status")
+            table.add_column("Fix")
+            for v in scan_res.vulnerabilities[:20]:
+                st = v.get("status", "UNKNOWN")
+                color = {"AFFECTED": "red", "NOT_AFFECTED": "green"}.get(st, "yellow")
+                table.add_row(
+                    v.get("dependency", v.get("package", "")),
+                    v.get("your_version", ""),
+                    f"[{color}]{st}[/{color}]",
+                    v.get("fix_version", ""),
+                )
+            console.print(table)
+        console.print()
+
+    console.print()
+
+
+def render_k8s_scan_json(result: Any) -> str:
+    """Render K8s scan results as JSON."""
+    return json.dumps(result.to_dict(), indent=2, ensure_ascii=False, default=str)
+
+
+## Execution path rendering ##
+
+EXEC_PATH_VERDICT_STYLES = {
+    "REACHABLE": ("🔴 REACHABLE", "bold red"),
+    "NOT_REACHABLE": ("✅ NOT REACHABLE", "bold green"),
+    "IMPORTED_ONLY": ("🟡 IMPORTED ONLY", "bold yellow"),
+    "INCONCLUSIVE": ("🟠 INCONCLUSIVE", "bold bright_red"),
+}
+
+
+def render_execution_path_terminal(
+    result: Any,
+    no_color: bool = False,
+) -> None:
+    """Render execution path analysis results."""
+    console = Console(no_color=no_color)
+    console.print()
+
+    console.print(Panel(
+        Text(f"CVE: {result.cve_id} │ Package: {result.target_package}", style="dim"),
+        title="🛡️  SENTINEL — Execution Path Analysis",
+        border_style="bold cyan",
+    ))
+
+    label, style = EXEC_PATH_VERDICT_STYLES.get(
+        result.verdict, ("❓ UNKNOWN", "bold")
+    )
+    console.print(f"\n  [{style}]{label}[/{style}]")
+    console.print()
+
+    if result.vulnerable_functions:
+        console.print(f"  Vulnerable functions: {', '.join(result.vulnerable_functions)}")
+
+    if result.entry_points:
+        console.print(f"  Entry points found: {len(result.entry_points)}")
+
+    if result.imports_found:
+        console.print(f"  Package imports found: {len(result.imports_found)}")
+        for imp in result.imports_found[:5]:
+            console.print(f"    • {imp.file_path}:{imp.line} — {imp.module}")
+
+    if result.call_chains:
+        console.print()
+        console.print("  [bold]Call chains to vulnerable code:[/bold]")
+        for chain in result.call_chains[:5]:
+            console.print(f"    {chain}")
+
+    if result.has_dynamic_dispatch:
+        console.print()
+        console.print("  [yellow]⚠ Dynamic dispatch detected (getattr/eval/exec) — analysis may be incomplete[/yellow]")
+
+    if result.claude_interpretation:
+        console.print()
+        console.print(Panel(
+            Markdown(result.claude_interpretation),
+            title="Claude Interpretation",
+            border_style="bold cyan",
+        ))
+
+    if result.details:
+        console.print(f"\n  {result.details}")
+
+    console.print()
+
+
 def render_markdown(
     cve_id: str,
     analysis: dict[str, Any],

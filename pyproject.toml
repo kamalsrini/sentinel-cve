@@ -20,6 +20,7 @@ dependencies = [
     "uvicorn[standard]>=0.24",
     "httpx>=0.25",
     "python-multipart>=0.0.6",
+    "kubernetes>=28.1",
 ]
 
 [project.scripts]

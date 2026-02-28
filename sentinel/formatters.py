@@ -391,6 +391,75 @@ def format_telegram_scan_md(result: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+# ── K8s scan formatters ────────────────────────────────────────────────────
+
+EXEC_PATH_VERDICT_EMOJI = {
+    "REACHABLE": "🔴",
+    "NOT_REACHABLE": "✅",
+    "IMPORTED_ONLY": "🟡",
+    "INCONCLUSIVE": "🟠",
+}
+
+
+def format_slack_k8s_blocks(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Format K8s scan results as Slack blocks."""
+    k8s = result.get("k8s_scan", {})
+    ns = k8s.get("namespace") or "all namespaces"
+    cve_id = k8s.get("cve_id")
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": f"🛡️ K8s Scan — {ns}", "emoji": True}},
+        {"type": "divider"},
+    ]
+    for sr in k8s.get("scan_results", [])[:10]:
+        img = sr.get("image", "?")
+        vulns = sr.get("vulnerabilities", [])
+        text = f"*{img}*: {len(vulns)} vulnerabilities"
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": text}})
+    return blocks
+
+
+def format_telegram_k8s_md(result: dict[str, Any]) -> str:
+    """Format K8s scan results for Telegram."""
+    k8s = result.get("k8s_scan", {})
+    ns = k8s.get("namespace") or "all namespaces"
+    lines = [f"*🛡️ K8s Scan — {_escape_md2(ns)}*", ""]
+    for sr in k8s.get("scan_results", [])[:10]:
+        img = _escape_md2(sr.get("image", "?"))
+        vulns = sr.get("vulnerabilities", [])
+        lines.append(f"• `{img}`: {len(vulns)} vulnerabilities")
+    return "\n".join(lines)
+
+
+def format_slack_exec_path_blocks(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Format execution path results as Slack blocks."""
+    ep = result.get("execution_path", {})
+    verdict = ep.get("verdict", "UNKNOWN")
+    emoji = EXEC_PATH_VERDICT_EMOJI.get(verdict, "❓")
+    blocks: list[dict[str, Any]] = [
+        {"type": "header", "text": {"type": "plain_text", "text": "🛡️ Execution Path Analysis", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"{emoji} *{verdict}* for `{ep.get('cve_id', '')}`\nPackage: `{ep.get('target_package', '')}`"}},
+    ]
+    for chain in ep.get("call_chains", [])[:5]:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": f"```{chain}```"}})
+    return blocks
+
+
+def format_telegram_exec_path_md(result: dict[str, Any]) -> str:
+    """Format execution path results for Telegram."""
+    ep = result.get("execution_path", {})
+    verdict = ep.get("verdict", "UNKNOWN")
+    emoji = EXEC_PATH_VERDICT_EMOJI.get(verdict, "❓")
+    lines = [
+        f"*🛡️ Execution Path Analysis*",
+        f"{emoji} *{_escape_md2(verdict)}* for `{_escape_md2(ep.get('cve_id', ''))}`",
+        f"Package: `{_escape_md2(ep.get('target_package', ''))}`",
+    ]
+    for chain in ep.get("call_chains", [])[:5]:
+        lines.append(f"`{_escape_md2(chain)}`")
+    return "\n".join(lines)
+
+
 # ── Plain text ─────────────────────────────────────────────────────────────
 
 def format_plain(result: dict[str, Any]) -> str:

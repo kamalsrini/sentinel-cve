@@ -106,6 +106,64 @@ Infrastructure-focused with containers, K8s, CI/CD, and monitoring:
 | 📊 **Monitoring & Detection** | Logs, alerts, exploitation detection |
 | 🚨 **Incident Response Steps** | Step-by-step if actively exploited |
 
+## K8s Runtime BOM Scanner
+
+Scan your Kubernetes cluster for vulnerable container images:
+
+```bash
+# Scan all namespaces
+sentinel scan --k8s
+
+# Scan specific namespace
+sentinel scan --k8s --namespace production
+
+# Check specific CVE across cluster
+sentinel scan --k8s --cve CVE-2024-3094
+
+# Generate SBOM for all running images
+sentinel scan --k8s --sbom
+
+# Scan a specific image (no cluster connection needed)
+sentinel scan --k8s --image nginx:1.25
+```
+
+### K8s RBAC Setup
+
+Sentinel needs read-only access. Apply the minimal RBAC manifest:
+
+```bash
+kubectl apply -f config/k8s-rbac.yaml
+```
+
+This creates a `sentinel-readonly` ServiceAccount with only `get` and `list` on pods, namespaces, deployments, replicasets, daemonsets, and statefulsets. **No write access.**
+
+## Execution Path Analysis
+
+Determine if a CVE actually affects your code by tracing whether vulnerable functions are reachable from entry points:
+
+```bash
+# Full analysis with Claude interpretation
+sentinel scan . --cve CVE-2024-22195 --execution-path
+
+# Local-only (no data sent externally)
+sentinel scan . --cve CVE-2024-22195 --execution-path --local-only
+```
+
+Verdicts:
+- 🔴 **REACHABLE** — entry point → ... → vulnerable function call found
+- ✅ **NOT_REACHABLE** — vulnerable package imported but vulnerable function never called
+- 🟡 **IMPORTED_ONLY** — package is a dependency but never directly imported in source
+- 🟠 **INCONCLUSIVE** — dynamic dispatch, reflection, or complex patterns detected
+
+### Security: What data leaves your environment?
+
+| Mode | Data sent externally |
+|---|---|
+| `--local-only` | **Nothing** — pure local AST analysis |
+| Default | Only sanitized metadata: function names, import names, call graph edges (node/edge list), CVE description. **Never source code.** |
+
+All data sent to Claude is logged to `~/.sentinel/audit.log` for review.
+
 ## Cache Management
 
 ```bash

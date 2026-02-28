@@ -175,7 +175,7 @@ async def _run_cve(
 
 
 @cli.command()
-@click.argument("path_or_url")
+@click.argument("path_or_url", default=".")
 @click.option("--cve", "cve_id", default=None, help="Check a specific CVE against the repo.")
 @click.option("--deep", is_flag=True, help="Enable Claude code-path analysis.")
 @click.option("--local", is_flag=True, help="Dependency-only mode, no code sent to API.")
@@ -186,6 +186,12 @@ async def _run_cve(
     default="security",
     help="Output persona: security (default), exec, engineer, devops.",
 )
+@click.option("--k8s", is_flag=True, help="Scan Kubernetes cluster for vulnerable images.")
+@click.option("--namespace", default=None, help="K8s namespace to scan (default: all).")
+@click.option("--sbom", is_flag=True, help="Generate SBOM for K8s images.")
+@click.option("--image", default=None, help="Scan a specific container image.")
+@click.option("--execution-path", is_flag=True, help="Analyze execution path reachability.")
+@click.option("--local-only", is_flag=True, help="Execution path: no Claude, pure local AST analysis.")
 @click.pass_context
 def scan(
     ctx: click.Context,
@@ -195,14 +201,26 @@ def scan(
     local: bool,
     output_json: bool,
     persona: str,
+    k8s: bool,
+    namespace: str | None,
+    sbom: bool,
+    image: str | None,
+    execution_path: bool,
+    local_only: bool,
 ) -> None:
-    """Scan a repo for vulnerabilities.
+    """Scan a repo, K8s cluster, or container image for vulnerabilities.
 
     \b
     Examples:
         sentinel scan .
         sentinel scan . --cve CVE-2024-3094
-        sentinel scan . --cve CVE-2024-3094 --format exec
+        sentinel scan . --cve CVE-2024-3094 --execution-path
+        sentinel scan . --cve CVE-2024-3094 --execution-path --local-only
+        sentinel scan --k8s
+        sentinel scan --k8s --namespace production
+        sentinel scan --k8s --cve CVE-2024-3094
+        sentinel scan --k8s --sbom
+        sentinel scan --k8s --image nginx:1.25
         sentinel scan https://github.com/user/repo --deep
         sentinel scan . --json
     """
@@ -211,7 +229,14 @@ def scan(
         if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id):
             raise click.BadParameter(f"'{cve_id}' is not a valid CVE ID.")
 
-    asyncio.run(_run_scan(ctx, path_or_url, cve_id, deep, local, output_json, persona))
+    if k8s or image:
+        asyncio.run(_run_k8s_scan(ctx, cve_id, namespace, sbom, image, output_json))
+    elif execution_path:
+        if not cve_id:
+            raise click.UsageError("--execution-path requires --cve <CVE-ID>")
+        asyncio.run(_run_execution_path(ctx, path_or_url, cve_id, local_only, output_json))
+    else:
+        asyncio.run(_run_scan(ctx, path_or_url, cve_id, deep, local, output_json, persona))
 
 
 async def _run_scan(
@@ -301,6 +326,107 @@ async def _run_scan(
         sys.exit(1)
     except Exception as e:
         console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if ctx.obj.get("verbose"):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+async def _run_k8s_scan(
+    ctx: click.Context,
+    cve_id: str | None,
+    namespace: str | None,
+    sbom: bool,
+    image: str | None,
+    output_json: bool,
+) -> None:
+    """Run K8s cluster or image scan."""
+    from rich.console import Console
+    from sentinel.k8s_scanner import scan_cluster, scan_single_image, generate_sbom
+    from sentinel.renderer import render_k8s_scan_terminal, render_k8s_scan_json
+
+    no_color = ctx.obj.get("no_color", False)
+    quiet = ctx.obj.get("quiet", False)
+    console = Console(no_color=no_color, stderr=True)
+
+    try:
+        if image:
+            if not quiet:
+                console.print(f"[bold cyan]Scanning image {image}...[/bold cyan]", highlight=False)
+            if sbom:
+                sbom_data = generate_sbom(image)
+                import json as _json
+                click.echo(_json.dumps(sbom_data, indent=2))
+                return
+            result = await scan_single_image(image, cve_id=cve_id)
+        else:
+            if not quiet:
+                ns_label = f"namespace '{namespace}'" if namespace else "all namespaces"
+                console.print(f"[bold cyan]Scanning K8s cluster ({ns_label})...[/bold cyan]", highlight=False)
+            if sbom:
+                # Generate SBOM for all images
+                from sentinel.k8s_scanner import list_running_images
+                images = list_running_images(namespace=namespace)
+                sboms = []
+                for img_obj in images:
+                    sboms.append(generate_sbom(img_obj.image))
+                import json as _json
+                click.echo(_json.dumps(sboms, indent=2))
+                return
+            result = await scan_cluster(namespace=namespace, cve_id=cve_id)
+
+        if output_json:
+            import json as _json
+            click.echo(_json.dumps(result.to_dict(), indent=2, default=str))
+        else:
+            render_k8s_scan_terminal(result, no_color=no_color)
+
+    except RuntimeError as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        sys.exit(1)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if ctx.obj.get("verbose"):
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+async def _run_execution_path(
+    ctx: click.Context,
+    path_or_url: str,
+    cve_id: str,
+    local_only: bool,
+    output_json: bool,
+) -> None:
+    """Run execution path analysis."""
+    from rich.console import Console
+    from sentinel.execution_path import analyze_execution_path
+    from sentinel.renderer import render_execution_path_terminal
+
+    no_color = ctx.obj.get("no_color", False)
+    quiet = ctx.obj.get("quiet", False)
+    console = Console(no_color=no_color, stderr=True)
+
+    try:
+        if not quiet:
+            mode = "local-only" if local_only else "with Claude interpretation"
+            console.print(f"[bold cyan]Analyzing execution path ({mode})...[/bold cyan]", highlight=False)
+
+        result = await analyze_execution_path(
+            repo_path=path_or_url,
+            cve_id=cve_id,
+            local_only=local_only,
+        )
+
+        if output_json:
+            import json as _json
+            click.echo(_json.dumps(result.to_dict(), indent=2, default=str))
+        else:
+            render_execution_path_terminal(result, no_color=no_color)
+
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
         if ctx.obj.get("verbose"):
             import traceback
             traceback.print_exc()

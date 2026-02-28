@@ -1,0 +1,8 @@
+{
+  "CVE-2024-22195": ["jinja2.utils.urlize", "urlize"],
+  "CVE-2024-3094": ["lzma_code", "_lzma.LZMADecompressor"],
+  "CVE-2023-44487": ["http2.Transport", "h2.connection"],
+  "CVE-2024-34064": ["jinja2.utils.urlize", "urlize"],
+  "CVE-2023-45803": ["urllib3.request", "urllib3.HTTPConnectionPool.urlopen"],
+  "CVE-2024-35195": ["requests.Session", "requests.get", "requests.post"]
+}

@@ -753,6 +753,58 @@ send_code = false             # Extra guard: must be true for --deep to work
 
 ---
 
+## 9b. K8s Runtime BOM Scanner — Security
+
+### Data Flow
+
+| Data | Where it goes | Risk | Mitigation |
+|---|---|---|---|
+| K8s pod metadata | Local only | None | Read-only RBAC, never writes to cluster |
+| Image names | Local + container runtime | Low | Credential redaction in logs |
+| Package lists from images | Local → OSV API for vuln check | Low | Only package names/versions, no image content |
+| Registry credentials | Never stored/logged | None | Redacted from all log output |
+
+### Access Controls
+- Read-only ClusterRole: only `get` and `list` on pods, namespaces, deployments
+- Never execs into running pods
+- Never writes to cluster
+- Detects in-cluster vs kubeconfig automatically
+- Credentials never cached or stored
+
+### Container Runtime Security
+- Uses `--rm` flag on all container runs (cleanup)
+- Overrides entrypoint only for package listing commands
+- No volume mounts from host
+- Timeout on all container operations (120s)
+
+## 9c. Execution Path Analysis — Security
+
+### CRITICAL: No Source Code Sent Externally
+
+| Data | Sent to Claude? | Notes |
+|---|---|---|
+| Source code | **NEVER** | Enforced by assertion + `contains_source_code()` check |
+| Function names | Yes (sanitized) | Only names, never bodies |
+| Import names | Yes (sanitized) | Module and imported name only |
+| Call graph edges | Yes (sanitized) | `caller -> callee` pairs only |
+| File names | Yes (sanitized) | Base filenames only |
+| Line numbers | Yes (sanitized) | Just numbers |
+| CVE description | Yes | Public data from NVD/OSV |
+
+### Enforcement
+- `SanitizedContext` class strips all source code
+- `contains_source_code()` heuristic checks for code patterns
+- `assert not contains_source_code(context)` before every API call — raises AssertionError if violated
+- `audit_log()` writes everything sent to Claude to `~/.sentinel/audit.log`
+- `--local-only` flag disables all external communication
+
+### Audit Trail
+All Claude API calls are logged with:
+- Timestamp
+- Exact data sent (function names, edges, etc.)
+- Action type
+Written to `~/.sentinel/audit.log` in JSON-lines format.
+
 ## 10. Implementation Phases
 
 ### Phase 1: CVE Explainer CLI (Weeks 1–3)
