@@ -31,6 +31,15 @@ export NVD_API_KEY=xxxxxxxx-xxxx-...
 # Explain a CVE (5-section report with colored terminal output)
 sentinel cve CVE-2024-3094
 
+# Choose output persona (see Personas below)
+sentinel cve CVE-2024-3094 --format exec       # Executive / CISO summary
+sentinel cve CVE-2024-3094 -f engineer          # Deep technical advisory
+sentinel cve CVE-2024-3094 -f devops            # Infrastructure-focused
+sentinel cve CVE-2024-3094 -f security          # Default 5-section report
+
+# Also works with scan
+sentinel scan . --cve CVE-2024-3094 --format exec
+
 # JSON output
 sentinel cve CVE-2024-3094 --json
 
@@ -47,7 +56,10 @@ sentinel cve CVE-2024-3094 --no-cache
 sentinel cve CVE-2024-3094 -v
 ```
 
-## Output Sections
+## Output Personas (`--format` / `-f`)
+
+### `security` (default) — Security Analyst
+The classic 5-section vulnerability briefing:
 
 | Section | What it answers |
 |---|---|
@@ -56,6 +68,43 @@ sentinel cve CVE-2024-3094 -v
 | 🚨 **Who should panic** | Affected software, versions, ecosystems |
 | 🛡️ **How to patch safely** | Remediation steps, patch links |
 | ✅ **What to test** | Verification steps after patching |
+
+### `exec` — Executive / CISO
+A 10-second read for busy executives. Traffic light severity, business impact, one action item. No jargon.
+
+```
+🔴 CRITICAL — CVE-2024-3094 (XZ Backdoor)
+
+A backdoor was planted in a core Linux compression library used across most servers.
+Attackers can intercept and modify data on any system running xz 5.6.0-5.6.1.
+Immediate downgrade required — estimated 15-30 min per server, no downtime expected.
+
+Risk: Supply chain compromise — high severity, active exploitation
+Impact: All Linux infrastructure running affected versions
+Action needed: Downgrade xz to 5.4.6. Verify with `xz --version`.
+```
+
+### `engineer` — Software Engineer
+Deep technical dive with exact versions, upgrade commands, grep patterns, and test steps:
+
+| Section | Focus |
+|---|---|
+| 📦 **Affected Libraries & Versions** | Exact version ranges, dependency chains |
+| 🔧 **Code-Level Remediation** | Specific upgrade commands, config changes |
+| 🔍 **What to Grep For** | Patterns to search your codebase |
+| 🧪 **How to Test the Fix** | Verification commands, regression tests |
+| ⚠️ **Breaking Changes** | Deprecations, behavioral differences |
+
+### `devops` — DevOps / SRE
+Infrastructure-focused with containers, K8s, CI/CD, and monitoring:
+
+| Section | Focus |
+|---|---|
+| 🏗️ **Affected Infrastructure** | Base images, containers, cloud services |
+| 🚀 **Deployment Impact** | Rolling update strategy, downtime assessment |
+| 🔄 **Rollback Plan** | How to revert if the patch causes issues |
+| 📊 **Monitoring & Detection** | Logs, alerts, exploitation detection |
+| 🚨 **Incident Response Steps** | Step-by-step if actively exploited |
 
 ## Cache Management
 

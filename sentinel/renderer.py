@@ -19,16 +19,49 @@ SECTION_STYLES: dict[str, tuple[str, str]] = {
     "what_to_test":     ("✅ What to test",        "cyan"),
 }
 
+ENGINEER_SECTION_STYLES: dict[str, tuple[str, str]] = {
+    "affected_libraries": ("📦 Affected Libraries & Versions", "blue"),
+    "remediation":        ("🔧 Code-Level Remediation",        "green"),
+    "grep_patterns":      ("🔍 What to Grep For",              "yellow"),
+    "test_fix":           ("🧪 How to Test the Fix",           "cyan"),
+    "breaking_changes":   ("⚠️  Breaking Changes",              "red"),
+}
+
+DEVOPS_SECTION_STYLES: dict[str, tuple[str, str]] = {
+    "affected_infra":     ("🏗️  Affected Infrastructure",  "blue"),
+    "deployment_impact":  ("🚀 Deployment Impact",         "yellow"),
+    "rollback_plan":      ("🔄 Rollback Plan",             "green"),
+    "monitoring":         ("📊 Monitoring & Detection",    "cyan"),
+    "incident_response":  ("🚨 Incident Response Steps",   "red"),
+}
+
+PERSONA_SECTION_STYLES: dict[str, dict[str, tuple[str, str]]] = {
+    "security": SECTION_STYLES,
+    "engineer": ENGINEER_SECTION_STYLES,
+    "devops": DEVOPS_SECTION_STYLES,
+}
+
 
 def render_terminal(
     cve_id: str,
     analysis: dict[str, Any],
     sources: dict[str, Any],
     no_color: bool = False,
+    persona: str = "security",
 ) -> None:
-    """Render the 5-section report to the terminal using rich."""
+    """Render the report to the terminal using rich.
+
+    Args:
+        cve_id: The CVE identifier.
+        analysis: Analysis dict with 'raw', 'sections', and optionally 'persona'.
+        sources: Dict of data sources used.
+        no_color: Disable colored output.
+        persona: Output persona ('security', 'exec', 'engineer', 'devops').
+    """
     console = Console(no_color=no_color)
     sections = analysis.get("sections", {})
+    # Use persona from analysis if available, fall back to parameter
+    persona = analysis.get("persona", persona)
 
     # If brief mode
     if "brief" in sections:
@@ -37,6 +70,18 @@ def render_terminal(
             Markdown(sections["brief"]),
             title=f"🛡️  SENTINEL — {cve_id} (Brief)",
             border_style="bold cyan",
+        ))
+        console.print()
+        return
+
+    # Exec persona: compact output, no panels
+    if persona == "exec" and "exec" in sections:
+        console.print()
+        console.print(Panel(
+            Markdown(sections["exec"]),
+            title=f"🛡️  SENTINEL — {cve_id} (Executive Summary)",
+            border_style="bold red",
+            padding=(1, 2),
         ))
         console.print()
         return
@@ -52,17 +97,21 @@ def render_terminal(
         console.print()
         return
 
+    # Determine which section styles to use based on persona
+    section_styles = PERSONA_SECTION_STYLES.get(persona, SECTION_STYLES)
+
     # Header
     console.print()
     source_names = ", ".join(s.upper() for s in sources.keys()) if sources else "N/A"
+    persona_label = {"security": "Security Analyst", "engineer": "Engineer", "devops": "DevOps/SRE"}.get(persona, persona.title())
     console.print(Panel(
-        Text(f"CVSS & source details below  │  Sources: {source_names}", style="dim"),
+        Text(f"Persona: {persona_label}  │  Sources: {source_names}", style="dim"),
         title=f"🛡️  SENTINEL — {cve_id}",
         border_style="bold cyan",
     ))
 
     # Each section as a panel
-    for key, (title, color) in SECTION_STYLES.items():
+    for key, (title, color) in section_styles.items():
         content = sections.get(key, "No data available for this section.")
         console.print(Panel(
             Markdown(content),

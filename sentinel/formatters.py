@@ -51,6 +51,31 @@ def _truncate(text: str, limit: int = 3000) -> str:
 
 # ── Slack Block Kit ────────────────────────────────────────────────────────
 
+PERSONA_SECTION_MAPS: dict[str, list[tuple[str, str]]] = {
+    "security": [
+        ("what_it_is", "🔍 What it is"),
+        ("how_to_exploit", "💥 How to exploit"),
+        ("who_should_panic", "🚨 Who should panic"),
+        ("how_to_patch", "🛡️ How to patch safely"),
+        ("what_to_test", "✅ What to test"),
+    ],
+    "engineer": [
+        ("affected_libraries", "📦 Affected Libraries & Versions"),
+        ("remediation", "🔧 Code-Level Remediation"),
+        ("grep_patterns", "🔍 What to Grep For"),
+        ("test_fix", "🧪 How to Test the Fix"),
+        ("breaking_changes", "⚠️ Breaking Changes"),
+    ],
+    "devops": [
+        ("affected_infra", "🏗️ Affected Infrastructure"),
+        ("deployment_impact", "🚀 Deployment Impact"),
+        ("rollback_plan", "🔄 Rollback Plan"),
+        ("monitoring", "📊 Monitoring & Detection"),
+        ("incident_response", "🚨 Incident Response Steps"),
+    ],
+}
+
+
 def format_slack_blocks(result: dict[str, Any]) -> list[dict[str, Any]]:
     """Format a CVE analysis result as Slack Block Kit blocks.
 
@@ -64,15 +89,17 @@ def format_slack_blocks(result: dict[str, Any]) -> list[dict[str, Any]]:
     analysis = result.get("analysis", {})
     sections = analysis.get("sections", {})
     sources = result.get("sources", {})
+    persona = analysis.get("persona", "security")
     severity = _extract_severity(sections)
     source_names = ", ".join(s.upper() for s in sources) if sources else "N/A"
 
     blocks: list[dict[str, Any]] = []
 
     # Header
+    persona_label = {"security": "", "exec": " (Executive)", "engineer": " (Engineer)", "devops": " (DevOps)"}.get(persona, "")
     blocks.append({
         "type": "header",
-        "text": {"type": "plain_text", "text": f"🛡️ Sentinel — {cve_id}", "emoji": True},
+        "text": {"type": "plain_text", "text": f"🛡️ Sentinel — {cve_id}{persona_label}", "emoji": True},
     })
     blocks.append({
         "type": "context",
@@ -90,14 +117,16 @@ def format_slack_blocks(result: dict[str, Any]) -> list[dict[str, Any]]:
         })
         return blocks
 
-    # 5 sections
-    section_map = [
-        ("what_it_is", "🔍 What it is"),
-        ("how_to_exploit", "💥 How to exploit"),
-        ("who_should_panic", "🚨 Who should panic"),
-        ("how_to_patch", "🛡️ How to patch safely"),
-        ("what_to_test", "✅ What to test"),
-    ]
+    # Exec persona: compact output
+    if persona == "exec" and "exec" in sections:
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": _truncate(sections["exec"])},
+        })
+        return blocks
+
+    # Section-based output (security, engineer, devops)
+    section_map = PERSONA_SECTION_MAPS.get(persona, PERSONA_SECTION_MAPS["security"])
 
     for key, title in section_map:
         content = sections.get(key)
@@ -203,16 +232,14 @@ def format_teams_card(result: dict[str, Any]) -> dict[str, Any]:
         },
     ]
 
+    persona = analysis.get("persona", "security")
+
     if "brief" in sections:
         body.append({"type": "TextBlock", "text": _truncate(sections["brief"], 2000), "wrap": True})
+    elif persona == "exec" and "exec" in sections:
+        body.append({"type": "TextBlock", "text": _truncate(sections["exec"], 2000), "wrap": True})
     else:
-        section_map = [
-            ("what_it_is", "🔍 What it is"),
-            ("how_to_exploit", "💥 How to exploit"),
-            ("who_should_panic", "🚨 Who should panic"),
-            ("how_to_patch", "🛡️ How to patch safely"),
-            ("what_to_test", "✅ What to test"),
-        ]
+        section_map = PERSONA_SECTION_MAPS.get(persona, PERSONA_SECTION_MAPS["security"])
         for key, title in section_map:
             content = sections.get(key)
             if not content:
@@ -305,6 +332,8 @@ def format_telegram_md(result: dict[str, Any]) -> str:
     severity = _extract_severity(sections)
     source_names = ", ".join(s.upper() for s in sources) if sources else "N/A"
 
+    persona = analysis.get("persona", "security")
+
     lines = [
         f"*🛡️ Sentinel — {_escape_md2(cve_id)}*",
         f"Severity: *{_escape_md2(severity)}* {SEVERITY_EMOJI.get(severity, '')}  \\|  Sources: {_escape_md2(source_names)}",
@@ -313,14 +342,10 @@ def format_telegram_md(result: dict[str, Any]) -> str:
 
     if "brief" in sections:
         lines.append(_escape_md2(_truncate(sections["brief"], 3500)))
+    elif persona == "exec" and "exec" in sections:
+        lines.append(_escape_md2(_truncate(sections["exec"], 3500)))
     else:
-        section_map = [
-            ("what_it_is", "🔍 What it is"),
-            ("how_to_exploit", "💥 How to exploit"),
-            ("who_should_panic", "🚨 Who should panic"),
-            ("how_to_patch", "🛡️ How to patch safely"),
-            ("what_to_test", "✅ What to test"),
-        ]
+        section_map = PERSONA_SECTION_MAPS.get(persona, PERSONA_SECTION_MAPS["security"])
         for key, title in section_map:
             content = sections.get(key)
             if not content:
@@ -383,16 +408,37 @@ def format_plain(result: dict[str, Any]) -> str:
         "",
     ]
 
+    persona = analysis.get("persona", "security")
+
     if "brief" in sections:
         lines.append(sections["brief"])
+    elif persona == "exec" and "exec" in sections:
+        lines.append(sections["exec"])
     else:
-        section_map = [
-            ("what_it_is", "WHAT IT IS"),
-            ("how_to_exploit", "HOW TO EXPLOIT"),
-            ("who_should_panic", "WHO SHOULD PANIC"),
-            ("how_to_patch", "HOW TO PATCH SAFELY"),
-            ("what_to_test", "WHAT TO TEST"),
-        ]
+        plain_section_maps: dict[str, list[tuple[str, str]]] = {
+            "security": [
+                ("what_it_is", "WHAT IT IS"),
+                ("how_to_exploit", "HOW TO EXPLOIT"),
+                ("who_should_panic", "WHO SHOULD PANIC"),
+                ("how_to_patch", "HOW TO PATCH SAFELY"),
+                ("what_to_test", "WHAT TO TEST"),
+            ],
+            "engineer": [
+                ("affected_libraries", "AFFECTED LIBRARIES & VERSIONS"),
+                ("remediation", "CODE-LEVEL REMEDIATION"),
+                ("grep_patterns", "WHAT TO GREP FOR"),
+                ("test_fix", "HOW TO TEST THE FIX"),
+                ("breaking_changes", "BREAKING CHANGES"),
+            ],
+            "devops": [
+                ("affected_infra", "AFFECTED INFRASTRUCTURE"),
+                ("deployment_impact", "DEPLOYMENT IMPACT"),
+                ("rollback_plan", "ROLLBACK PLAN"),
+                ("monitoring", "MONITORING & DETECTION"),
+                ("incident_response", "INCIDENT RESPONSE STEPS"),
+            ],
+        }
+        section_map = plain_section_maps.get(persona, plain_section_maps["security"])
         for key, title in section_map:
             content = sections.get(key)
             if not content:

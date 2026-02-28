@@ -888,4 +888,45 @@ sentinel watch CVE-2026-12345
 
 # In Telegram
 # Just message: sentinel CVE-2026-12345
+
+# Persona-based output formatting
+sentinel cve CVE-2026-12345 --format exec       # Executive/CISO: 10-second traffic light summary
+sentinel cve CVE-2026-12345 -f engineer          # Engineer: deep technical dive with commands
+sentinel cve CVE-2026-12345 -f devops            # DevOps/SRE: infrastructure, containers, K8s
+sentinel cve CVE-2026-12345 -f security          # Security analyst: default 5-section report
+sentinel scan . --cve CVE-2026-12345 -f exec     # Works with scan too
 ```
+
+---
+
+## 11. Persona-Based Output Formatting
+
+### Overview
+
+Sentinel supports four output personas via the `--format` / `-f` flag, each tailored to a different audience. The same CVE data is analyzed by Claude with a persona-specific prompt, producing output focused on what that audience cares about most.
+
+### Personas
+
+| Persona | Audience | Focus | Length |
+|---|---|---|---|
+| `security` | Security Analyst | 5-section vulnerability briefing (What/Exploit/Panic/Patch/Test) | Full report |
+| `exec` | CISO / Executive | Traffic light severity, business impact, one action item | 5-10 lines |
+| `engineer` | Software Engineer | Exact versions, upgrade commands, grep patterns, breaking changes | Detailed |
+| `devops` | DevOps / SRE | Infrastructure impact, containers, K8s, monitoring, incident response | Detailed |
+
+### Implementation Details
+
+- **Prompts**: Each persona has a dedicated system prompt and user prompt template in `sentinel/prompts.py`
+- **Synthesizer**: `analyze_cve()` accepts a `persona` parameter, selects the right prompt, and parses response sections accordingly
+- **Caching**: Results are cached per-persona — same CVE with different `--format` produces and caches different analyses
+- **Rendering**: Terminal, Slack, Teams, Telegram, and plain text formatters all support persona-specific section layouts
+- **Default**: `--format security` produces identical output to the original (no flag) behavior
+
+### Cache Keys
+
+Cache keys include the persona to avoid mixing outputs:
+- `analysis:CVE-2024-3094:security` — security analyst report
+- `analysis:CVE-2024-3094:exec` — executive summary
+- `analysis:CVE-2024-3094:engineer` — engineer advisory
+- `analysis:CVE-2024-3094:devops` — devops/SRE advisory
+- `analysis:CVE-2024-3094:brief` — brief one-paragraph (persona-independent)

@@ -61,6 +61,12 @@ def cli(ctx: click.Context, no_color: bool, no_cache: bool, verbose: bool, quiet
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
 @click.option("--markdown", "output_markdown", is_flag=True, help="Output as Markdown.")
 @click.option("--brief", is_flag=True, help="One-paragraph summary only.")
+@click.option(
+    "--format", "-f", "persona",
+    type=click.Choice(["security", "exec", "engineer", "devops"], case_sensitive=False),
+    default="security",
+    help="Output persona: security (default), exec, engineer, devops.",
+)
 @click.pass_context
 def cve(
     ctx: click.Context,
@@ -68,16 +74,20 @@ def cve(
     output_json: bool,
     output_markdown: bool,
     brief: bool,
+    persona: str,
 ) -> None:
-    """Explain a CVE with a 5-section vulnerability briefing.
+    """Explain a CVE with a vulnerability briefing.
 
     \b
     Examples:
         sentinel cve CVE-2024-3094
+        sentinel cve CVE-2024-3094 --format exec
+        sentinel cve CVE-2024-3094 -f engineer
+        sentinel cve CVE-2024-3094 -f devops
         sentinel cve CVE-2024-3094 --json
         sentinel cve CVE-2024-3094 --brief
     """
-    asyncio.run(_run_cve(ctx, cve_id, output_json, output_markdown, brief))
+    asyncio.run(_run_cve(ctx, cve_id, output_json, output_markdown, brief, persona))
 
 
 async def _run_cve(
@@ -86,6 +96,7 @@ async def _run_cve(
     output_json: bool,
     output_markdown: bool,
     brief: bool,
+    persona: str = "security",
 ) -> None:
     """Async implementation of the cve command."""
     from rich.console import Console
@@ -102,8 +113,8 @@ async def _run_cve(
     console = Console(no_color=no_color, stderr=True)
 
     try:
-        # Check cache for existing analysis
-        cache_key = f"analysis:{cve_id}:{'brief' if brief else 'full'}"
+        # Check cache for existing analysis (persona-specific)
+        cache_key = f"analysis:{cve_id}:{'brief' if brief else persona}"
         cached: dict[str, Any] | None = None
         if not no_cache:
             cached = await cache_get(cache_key, category="analysis")
@@ -138,7 +149,7 @@ async def _run_cve(
                 console.print("[bold cyan]Analyzing with Claude...[/bold cyan]", highlight=False)
 
             # Analyze with Claude
-            analysis = await analyze_cve(raw_context, brief=brief)
+            analysis = await analyze_cve(raw_context, brief=brief, persona=persona)
 
             # Cache the result
             if not no_cache:
@@ -150,7 +161,7 @@ async def _run_cve(
         elif output_markdown:
             click.echo(render_markdown(cve_id, analysis, sources))
         else:
-            render_terminal(cve_id, analysis, sources, no_color=no_color)
+            render_terminal(cve_id, analysis, sources, no_color=no_color, persona=persona)
 
     except ValueError as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
@@ -169,6 +180,12 @@ async def _run_cve(
 @click.option("--deep", is_flag=True, help="Enable Claude code-path analysis.")
 @click.option("--local", is_flag=True, help="Dependency-only mode, no code sent to API.")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--format", "-f", "persona",
+    type=click.Choice(["security", "exec", "engineer", "devops"], case_sensitive=False),
+    default="security",
+    help="Output persona: security (default), exec, engineer, devops.",
+)
 @click.pass_context
 def scan(
     ctx: click.Context,
@@ -177,6 +194,7 @@ def scan(
     deep: bool,
     local: bool,
     output_json: bool,
+    persona: str,
 ) -> None:
     """Scan a repo for vulnerabilities.
 
@@ -184,6 +202,7 @@ def scan(
     Examples:
         sentinel scan .
         sentinel scan . --cve CVE-2024-3094
+        sentinel scan . --cve CVE-2024-3094 --format exec
         sentinel scan https://github.com/user/repo --deep
         sentinel scan . --json
     """
@@ -192,7 +211,7 @@ def scan(
         if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id):
             raise click.BadParameter(f"'{cve_id}' is not a valid CVE ID.")
 
-    asyncio.run(_run_scan(ctx, path_or_url, cve_id, deep, local, output_json))
+    asyncio.run(_run_scan(ctx, path_or_url, cve_id, deep, local, output_json, persona))
 
 
 async def _run_scan(
@@ -202,6 +221,7 @@ async def _run_scan(
     deep: bool,
     local: bool,
     output_json: bool,
+    persona: str = "security",
 ) -> None:
     """Async implementation of the scan command."""
     from rich.console import Console
