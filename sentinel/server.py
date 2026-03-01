@@ -11,17 +11,73 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Sentinel CVE Explainer", version="0.1.0")
 
+# ── CORS middleware ────────────────────────────────────────────────────────
+
+_allowed_origins = os.environ.get("SENTINEL_CORS_ORIGINS", "").split(",")
+_allowed_origins = [o.strip() for o in _allowed_origins if o.strip()]
+if not _allowed_origins:
+    _allowed_origins = []  # No origins allowed by default
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=True,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+# ── Security headers middleware ────────────────────────────────────────────
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        return response
+
+app.add_middleware(SecurityHeadersMiddleware)
+
+# ── Allow-unsigned flag ────────────────────────────────────────────────────
+
+ALLOW_UNSIGNED = os.environ.get("SENTINEL_ALLOW_UNSIGNED", "").lower() in ("1", "true", "yes")
+
+
+@app.on_event("startup")
+async def _startup_security_check():
+    """Check webhook secrets on startup."""
+    warnings = []
+    if not os.environ.get("SLACK_SIGNING_SECRET"):
+        warnings.append("SLACK_SIGNING_SECRET")
+    if not os.environ.get("TEAMS_WEBHOOK_SECRET"):
+        warnings.append("TEAMS_WEBHOOK_SECRET")
+    if warnings:
+        msg = (
+            f"WARNING: The following webhook secrets are NOT configured: {', '.join(warnings)}. "
+            f"Webhook endpoints will REJECT all requests. "
+            f"Set the secrets or set SENTINEL_ALLOW_UNSIGNED=1 to allow unsigned requests (NOT recommended for production)."
+        )
+        logger.warning(msg)
+        if ALLOW_UNSIGNED:
+            logger.warning("SENTINEL_ALLOW_UNSIGNED is enabled — webhook endpoints will accept unsigned requests. THIS IS INSECURE.")
+
 # ── Rate limiting ──────────────────────────────────────────────────────────
 
 _rate_limits: dict[str, list[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
-RATE_LIMIT_MAX = 10  # requests per window
+RATE_LIMIT_MAX = 30  # requests per window
 
 
 def _check_rate_limit(key: str) -> bool:
@@ -135,10 +191,10 @@ async def _slack_background(command: dict[str, Any], response_url: str) -> None:
             await post_response(response_url, help_blocks())
         elif action == "error":
             await post_response(response_url, [{"type": "section", "text": {"type": "mrkdwn", "text": f"❌ {command['message']}"}}])
-    except Exception as e:
+    except Exception:
         logger.exception("Slack background task error")
         try:
-            await post_response(response_url, [{"type": "section", "text": {"type": "mrkdwn", "text": f"❌ Error: {e}"}}])
+            await post_response(response_url, [{"type": "section", "text": {"type": "mrkdwn", "text": "❌ An internal error occurred. Please try again later."}}])
         except Exception:
             pass
 
@@ -253,9 +309,9 @@ async def teams_webhook(request: Request) -> Response:
             return JSONResponse(help_card())
     except ValueError as e:
         return JSONResponse({"type": "message", "text": f"❌ {e}"})
-    except Exception as e:
+    except Exception:
         logger.exception("Teams webhook error")
-        return JSONResponse({"type": "message", "text": f"❌ Internal error: {e}"})
+        return JSONResponse({"type": "message", "text": "❌ An internal error occurred. Please try again later."})
 
 
 # ── Telegram ───────────────────────────────────────────────────────────────
@@ -302,9 +358,9 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
                 await answer_callback(parsed.get("callback_id", ""), "Processing...")
         except ValueError as e:
             await send_message(chat_id, f"❌ {str(e)}", parse_mode="")
-        except Exception as e:
+        except Exception:
             logger.exception("Telegram background error")
-            await send_message(chat_id, f"❌ Error: {str(e)}", parse_mode="")
+            await send_message(chat_id, "❌ An internal error occurred. Please try again later.", parse_mode="")
 
     background_tasks.add_task(_tg_bg)
     return Response(status_code=200)

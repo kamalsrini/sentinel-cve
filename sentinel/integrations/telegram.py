@@ -18,6 +18,15 @@ def get_bot_token() -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
+def get_webhook_secret_path() -> str:
+    """Generate a hashed webhook path to avoid leaking the bot token in URLs/logs."""
+    import hashlib
+    token = get_bot_token()
+    if not token:
+        return "telegram-webhook"
+    return hashlib.sha256(f"sentinel-webhook:{token}".encode()).hexdigest()[:32]
+
+
 def parse_update(update: dict[str, Any]) -> dict[str, Any]:
     """Parse a Telegram webhook update into a command.
 
@@ -115,7 +124,7 @@ async def send_message(
     if reply_markup:
         payload["reply_markup"] = reply_markup
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=True) as client:
         resp = await client.post(url, json=payload)
         data = resp.json()
         if not data.get("ok"):
@@ -134,5 +143,5 @@ async def answer_callback(callback_id: str, text: str = "") -> None:
     if not token:
         return
     url = f"{BOT_API}/bot{token}/answerCallbackQuery"
-    async with httpx.AsyncClient(timeout=10) as client:
+    async with httpx.AsyncClient(timeout=10, verify=True) as client:
         await client.post(url, json={"callback_query_id": callback_id, "text": text})

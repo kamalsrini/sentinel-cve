@@ -93,22 +93,28 @@ class ScanResult:
 
 
 def is_github_url(path_or_url: str) -> bool:
-    """Check if the input is a GitHub URL."""
-    return bool(re.match(r"https?://(www\.)?github\.com/", path_or_url))
+    """Check if the input is a remote git URL (GitHub, GitLab, Bitbucket)."""
+    return bool(re.match(r"https?://", path_or_url))
 
 
 def clone_repo(url: str) -> str:
-    """Shallow-clone a GitHub repo to a temp directory. Returns the path."""
-    tmp = tempfile.mkdtemp(prefix="sentinel-scan-")
+    """Shallow-clone a repo to a temp directory. Returns the path.
+
+    Only HTTPS URLs to known git hosts are allowed.
+    """
+    from sentinel.sanitize import validate_url
+    validate_url(url)
+    tmp = tempfile.mkdtemp(prefix="sentinel-scan-", dir=None)
+    os.chmod(tmp, 0o700)
     logger.info("Cloning %s to %s", url, tmp)
     try:
         subprocess.run(
-            ["git", "clone", "--depth", "1", url, tmp],
+            ["git", "clone", "--depth", "1", "--", url, tmp],
             check=True, capture_output=True, text=True, timeout=120,
         )
     except subprocess.CalledProcessError as e:
         shutil.rmtree(tmp, ignore_errors=True)
-        raise ValueError(f"Failed to clone {url}: {e.stderr.strip()}") from e
+        raise ValueError(f"Failed to clone repository: {e.stderr.strip()[:200]}") from e
     except FileNotFoundError:
         shutil.rmtree(tmp, ignore_errors=True)
         raise ValueError("git is not installed. Install git to scan GitHub URLs.")

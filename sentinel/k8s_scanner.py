@@ -208,10 +208,26 @@ def _detect_container_runtime() -> str | None:
 
 def _run_in_container(image: str, cmd: str, runtime: str = "docker") -> str | None:
     """Run a command in a container with overridden entrypoint. Returns stdout or None."""
+    from sentinel.sanitize import validate_image_name
     redacted_image = _redact_credentials(image)
     try:
+        validate_image_name(image)
+    except ValueError as e:
+        logger.error("Rejected unsafe image name %s: %s", redacted_image, e)
+        return None
+    try:
         result = subprocess.run(
-            [runtime, "run", "--rm", "--entrypoint", "/bin/sh", image, "-c", cmd],
+            [
+                runtime, "run", "--rm",
+                "--network", "none",
+                "--read-only",
+                "--memory", "512m",
+                "--cpus", "0.5",
+                "--security-opt", "no-new-privileges",
+                "--cap-drop", "ALL",
+                "--entrypoint", "/bin/sh",
+                image, "-c", cmd,
+            ],
             capture_output=True, text=True, timeout=120,
         )
         if result.returncode == 0:

@@ -32,8 +32,8 @@ def verify_hmac(body: bytes, auth_header: str) -> bool:
     """
     secret = get_webhook_secret()
     if not secret:
-        logger.warning("TEAMS_WEBHOOK_SECRET not set — skipping verification")
-        return True
+        logger.error("TEAMS_WEBHOOK_SECRET not set — denying request (configure secret or use --allow-unsigned)")
+        return False
 
     if not auth_header.startswith("HMAC "):
         return False
@@ -115,7 +115,7 @@ async def post_to_webhook(card: dict[str, Any], webhook_url: str | None = None) 
     if not url:
         logger.error("TEAMS_WEBHOOK_URL not set")
         return
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=True) as client:
         resp = await client.post(url, json=card)
         if resp.status_code not in (200, 201):
             logger.error("Teams webhook POST failed: %s %s", resp.status_code, resp.text)

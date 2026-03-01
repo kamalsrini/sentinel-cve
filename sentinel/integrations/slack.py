@@ -27,8 +27,8 @@ def verify_signature(body: bytes, timestamp: str, signature: str) -> bool:
     """Verify Slack request signature using HMAC-SHA256."""
     secret = get_signing_secret()
     if not secret:
-        logger.warning("SLACK_SIGNING_SECRET not set — skipping verification")
-        return True
+        logger.error("SLACK_SIGNING_SECRET not set — denying request (configure secret or use --allow-unsigned)")
+        return False
 
     # Reject old timestamps (> 5 min)
     try:
@@ -96,7 +96,7 @@ def help_blocks() -> list[dict[str, Any]]:
 
 async def post_response(response_url: str, blocks: list[dict[str, Any]], text: str = "") -> None:
     """Post a response back to Slack via response_url."""
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=True) as client:
         payload: dict[str, Any] = {"response_type": "in_channel", "blocks": blocks}
         if text:
             payload["text"] = text
@@ -111,7 +111,7 @@ async def post_to_channel(channel: str, blocks: list[dict[str, Any]], text: str 
     if not token:
         logger.error("SLACK_BOT_TOKEN not set")
         return
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=30, verify=True) as client:
         payload: dict[str, Any] = {
             "channel": channel,
             "blocks": blocks,

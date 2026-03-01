@@ -173,8 +173,17 @@ async def deep_scan(
             analysis="No usage of the affected dependency found in source files.",
         )
 
-    # Build context for Claude
-    code_context = _build_code_context(usages, dep_name, dep_version, cve_id, cve_summary)
+    # Build SANITIZED context for Claude — NO SOURCE CODE
+    code_context = _build_sanitized_context(usages, dep_name, dep_version, cve_id, cve_summary)
+
+    # Verify no source code leaks
+    from sentinel.execution_path import contains_source_code
+    assert not contains_source_code(code_context), (
+        "SECURITY: Source code detected in Claude prompt. Aborting."
+    )
+
+    # Audit log
+    _audit_log_deep_scan(code_context, cve_id, dep_name)
 
     # Call Claude
     api_key = get_api_key()
@@ -204,6 +213,34 @@ async def deep_scan(
     )
 
 
+def _build_sanitized_context(
+    usages: list[CodeUsage],
+    dep_name: str,
+    dep_version: str,
+    cve_id: str,
+    cve_summary: str,
+) -> str:
+    """Build SANITIZED context for Claude — NO SOURCE CODE, only metadata.
+
+    Only sends: file names, line numbers, import statement (single line), count of usages.
+    NEVER sends code snippets, function bodies, or surrounding context.
+    """
+    parts = [
+        f"CVE: {cve_id}",
+        f"Vulnerability summary: {cve_summary}" if cve_summary else "",
+        f"Affected dependency: {dep_name} (version {dep_version} in use)",
+        "",
+        f"The dependency is imported/used in {len(usages)} location(s):",
+        "",
+    ]
+
+    for usage in usages:
+        # ONLY metadata — file, line number, and the single import statement
+        parts.append(f"- {usage.file}:{usage.line} — import: {usage.import_statement}")
+
+    return "\n".join(parts)
+
+
 def _build_code_context(
     usages: list[CodeUsage],
     dep_name: str,
@@ -211,7 +248,8 @@ def _build_code_context(
     cve_id: str,
     cve_summary: str,
 ) -> str:
-    """Build the context document for Claude's code-path analysis."""
+    """DEPRECATED — use _build_sanitized_context instead.
+    Kept for local-only display. NEVER send output to external APIs."""
     parts = [
         f"CVE: {cve_id}",
         f"Vulnerability summary: {cve_summary}" if cve_summary else "",
@@ -231,6 +269,24 @@ def _build_code_context(
         total_chars += len(entry)
 
     return "\n".join(parts)
+
+
+def _audit_log_deep_scan(context: str, cve_id: str, dep_name: str) -> None:
+    """Log what was sent to Claude for audit trail."""
+    import datetime
+    import json
+    audit_path = Path.home() / ".sentinel" / "audit.log"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    entry = {
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "action": "deep_scan_claude_call",
+        "cve_id": cve_id,
+        "dependency": dep_name,
+        "context_length": len(context),
+        "context_preview": context[:200],
+    }
+    with open(audit_path, "a") as f:
+        f.write(json.dumps(entry) + "\n")
 
 
 def _parse_verdict(analysis: str) -> str:
