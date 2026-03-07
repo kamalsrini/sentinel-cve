@@ -18,6 +18,37 @@ def get_bot_token() -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
+def get_webhook_secret() -> str:
+    """Get the Telegram webhook secret token for request verification."""
+    return os.environ.get("TELEGRAM_WEBHOOK_SECRET", "")
+
+
+def verify_secret_token(provided_token: str) -> bool:
+    """Verify the X-Telegram-Bot-Api-Secret-Token header.
+
+    Telegram sends this header on every webhook request if a secret_token
+    was set when calling setWebhook. See: https://core.telegram.org/bots/api#setwebhook
+
+    Returns True if verification passes (token matches or no secret configured
+    and SENTINEL_ALLOW_UNSIGNED is set).
+    """
+    secret = get_webhook_secret()
+    if not secret:
+        # Check if unsigned requests are allowed (development mode)
+        allow_unsigned = os.environ.get("SENTINEL_ALLOW_UNSIGNED", "").lower() in ("1", "true", "yes")
+        if allow_unsigned:
+            return True
+        logger.error(
+            "TELEGRAM_WEBHOOK_SECRET not set — denying request. "
+            "Set the secret or set SENTINEL_ALLOW_UNSIGNED=1 for development."
+        )
+        return False
+    if not provided_token:
+        return False
+    import hmac as _hmac
+    return _hmac.compare_digest(provided_token, secret)
+
+
 def get_webhook_secret_path() -> str:
     """Generate a hashed webhook path to avoid leaking the bot token in URLs/logs."""
     import hashlib

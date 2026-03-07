@@ -73,6 +73,65 @@ async def _fetch_mitre(session: aiohttp.ClientSession, cve_id: str) -> dict[str,
         return None
 
 
+async def _fetch_kev(session: aiohttp.ClientSession, cve_id: str) -> dict[str, Any] | None:
+    """Check if CVE is on the CISA Known Exploited Vulnerabilities catalog."""
+    url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+    try:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.warning("CISA KEV returned status %d", resp.status)
+                return None
+            data = await resp.json(content_type=None)
+            vulnerabilities = data.get("vulnerabilities", [])
+            for vuln in vulnerabilities:
+                if vuln.get("cveID", "").upper() == cve_id.upper():
+                    return {
+                        "source": "kev",
+                        "data": {
+                            "listed": True,
+                            "dateAdded": vuln.get("dateAdded"),
+                            "dueDate": vuln.get("dueDate"),
+                            "requiredAction": vuln.get("requiredAction"),
+                            "knownRansomwareCampaignUse": vuln.get("knownRansomwareCampaignUse", "Unknown"),
+                            "vulnerabilityName": vuln.get("vulnerabilityName"),
+                            "vendorProject": vuln.get("vendorProject"),
+                            "product": vuln.get("product"),
+                        },
+                    }
+            return {"source": "kev", "data": {"listed": False}}
+    except Exception as exc:
+        logger.warning("CISA KEV fetch failed: %s", exc)
+        return None
+
+
+async def _fetch_epss(session: aiohttp.ClientSession, cve_id: str) -> dict[str, Any] | None:
+    """Fetch EPSS (Exploit Prediction Scoring System) data from FIRST.org."""
+    url = f"https://api.first.org/data/v1/epss?cve={cve_id}"
+    try:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                logger.warning("EPSS returned status %d for %s", resp.status, cve_id)
+                return None
+            data = await resp.json()
+            epss_data = data.get("data", [])
+            if epss_data:
+                entry = epss_data[0]
+                score = float(entry.get("epss", 0))
+                percentile = float(entry.get("percentile", 0))
+                return {
+                    "source": "epss",
+                    "data": {
+                        "score": score,
+                        "percentile": percentile,
+                        "date": entry.get("date", ""),
+                    },
+                }
+            return None
+    except Exception as exc:
+        logger.warning("EPSS fetch failed for %s: %s", cve_id, exc)
+        return None
+
+
 async def fetch_cve_data(cve_id: str) -> dict[str, Any]:
     """Fetch CVE data from all sources in parallel.
 
@@ -82,11 +141,13 @@ async def fetch_cve_data(cve_id: str) -> dict[str, Any]:
     Returns:
         Dict with keys: cve_id, sources (dict of source->data), raw_context (formatted string).
     """
-    async with aiohttp.ClientSession(timeout=REQUEST_TIMEOUT) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30)) as session:
         results = await asyncio.gather(
             _fetch_nvd(session, cve_id),
             _fetch_osv(session, cve_id),
             _fetch_mitre(session, cve_id),
+            _fetch_kev(session, cve_id),
+            _fetch_epss(session, cve_id),
             return_exceptions=True,
         )
 
@@ -256,7 +317,7 @@ def _build_context(cve_id: str, sources: dict[str, Any]) -> str:
                 parts.append(f"Description: {d['value']}")
         # CVSS
         metrics = nvd.get("metrics", {})
-        for version_key in ("cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
+        for version_key in ("cvssMetricV40", "cvssMetricV31", "cvssMetricV30", "cvssMetricV2"):
             metric_list = metrics.get(version_key, [])
             if metric_list:
                 cvss = metric_list[0].get("cvssData", {})
@@ -337,6 +398,41 @@ def _build_context(cve_id: str, sources: dict[str, Any]) -> str:
             parts.append("CNA References:")
             for ref in cna_refs[:10]:
                 parts.append(f"  - {ref.get('url', '')}")
+        parts.append("")
+
+    if "kev" in sources:
+        kev = sources["kev"]
+        parts.append("=== CISA KEV DATA ===")
+        if kev.get("listed"):
+            parts.append("KEV Status: LISTED (confirmed actively exploited)")
+            parts.append(f"Date Added: {kev.get('dateAdded', 'N/A')}")
+            parts.append(f"Due Date: {kev.get('dueDate', 'N/A')}")
+            parts.append(f"Required Action: {kev.get('requiredAction', 'N/A')}")
+            parts.append(f"Known Ransomware Use: {kev.get('knownRansomwareCampaignUse', 'Unknown')}")
+            parts.append(f"Vulnerability Name: {kev.get('vulnerabilityName', 'N/A')}")
+        else:
+            parts.append("KEV Status: Not listed")
+        parts.append("")
+
+    if "epss" in sources:
+        epss = sources["epss"]
+        parts.append("=== EPSS DATA ===")
+        score = epss.get("score", 0)
+        percentile = epss.get("percentile", 0)
+        parts.append(f"EPSS Score: {score:.6f}")
+        parts.append(f"EPSS Percentile: {percentile * 100:.1f}th")
+        # Interpretation
+        if score > 0.9:
+            parts.append("Interpretation: Near-certain exploitation expected")
+        elif score > 0.5:
+            parts.append("Interpretation: Very high exploitation probability")
+        elif score > 0.1:
+            parts.append("Interpretation: Elevated exploitation probability")
+        elif score > 0.01:
+            parts.append("Interpretation: Moderate exploitation probability")
+        else:
+            parts.append("Interpretation: Low exploitation probability")
+        parts.append(f"Data Date: {epss.get('date', 'N/A')}")
         parts.append("")
 
     return "\n".join(parts)

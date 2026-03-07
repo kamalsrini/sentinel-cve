@@ -9,6 +9,10 @@ COPY sentinel/ sentinel/
 
 RUN pip install --no-cache-dir -e ".[server]"
 
+# Run as non-root user for security
+RUN adduser --disabled-password --no-create-home --gecos "" sentinel
+USER sentinel
+
 EXPOSE 8080
 
 CMD ["uvicorn", "sentinel.server:app", "--host", "0.0.0.0", "--port", "8080"]

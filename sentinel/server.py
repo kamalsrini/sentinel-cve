@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
 import time
-from collections import defaultdict
 from typing import Any
 
 from fastapi import BackgroundTasks, FastAPI, Request, Response
@@ -54,15 +54,32 @@ app.add_middleware(SecurityHeadersMiddleware)
 
 ALLOW_UNSIGNED = os.environ.get("SENTINEL_ALLOW_UNSIGNED", "").lower() in ("1", "true", "yes")
 
+# ── API key authentication ────────────────────────────────────────────
+API_KEY = os.environ.get("SENTINEL_API_KEY", "")
+
+
+def _check_api_key(request: Request) -> bool:
+    """Verify API key if configured. Returns True if auth passes."""
+    if not API_KEY:
+        return True  # No key configured = open (log warning at startup)
+    provided = request.headers.get("X-Sentinel-API-Key", "")
+    if not provided:
+        provided = request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not provided:
+        return False
+    return hmac.compare_digest(provided, API_KEY)
+
 
 @app.on_event("startup")
 async def _startup_security_check():
-    """Check webhook secrets on startup."""
+    """Check webhook secrets and API key on startup."""
     warnings = []
     if not os.environ.get("SLACK_SIGNING_SECRET"):
         warnings.append("SLACK_SIGNING_SECRET")
     if not os.environ.get("TEAMS_WEBHOOK_SECRET"):
         warnings.append("TEAMS_WEBHOOK_SECRET")
+    if not os.environ.get("TELEGRAM_WEBHOOK_SECRET"):
+        warnings.append("TELEGRAM_WEBHOOK_SECRET")
     if warnings:
         msg = (
             f"WARNING: The following webhook secrets are NOT configured: {', '.join(warnings)}. "
@@ -72,17 +89,34 @@ async def _startup_security_check():
         logger.warning(msg)
         if ALLOW_UNSIGNED:
             logger.warning("SENTINEL_ALLOW_UNSIGNED is enabled — webhook endpoints will accept unsigned requests. THIS IS INSECURE.")
+    if not API_KEY:
+        logger.warning("SENTINEL_API_KEY not set — REST API endpoints have no authentication. Set SENTINEL_API_KEY for production use.")
 
-# ── Rate limiting ──────────────────────────────────────────────────────────
+# ── Rate limiting (bounded) ────────────────────────────────────────────────
 
-_rate_limits: dict[str, list[float]] = defaultdict(list)
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX = 30  # requests per window
+_RATE_LIMIT_MAX_KEYS = 10000  # max tracked clients to prevent memory exhaustion
+
+_rate_limits: dict[str, list[float]] = {}
 
 
 def _check_rate_limit(key: str) -> bool:
-    """Return True if under rate limit."""
+    """Return True if under rate limit. Bounded to prevent memory exhaustion."""
     now = time.time()
+
+    # Evict stale keys when at capacity
+    if len(_rate_limits) >= _RATE_LIMIT_MAX_KEYS:
+        cutoff = now - RATE_LIMIT_WINDOW
+        stale = [k for k, v in _rate_limits.items() if not v or v[-1] < cutoff]
+        for k in stale:
+            del _rate_limits[k]
+        if len(_rate_limits) >= _RATE_LIMIT_MAX_KEYS:
+            return False
+
+    if key not in _rate_limits:
+        _rate_limits[key] = []
+
     _rate_limits[key] = [t for t in _rate_limits[key] if now - t < RATE_LIMIT_WINDOW]
     if len(_rate_limits[key]) >= RATE_LIMIT_MAX:
         return False
@@ -131,6 +165,8 @@ async def health() -> dict[str, str]:
 
 @app.post("/api/cve")
 async def api_cve(request: Request) -> JSONResponse:
+    if not _check_api_key(request):
+        return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
     body = await request.json()
     cve_id = body.get("cve_id", "").upper()
     if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id):
@@ -149,11 +185,19 @@ async def api_cve(request: Request) -> JSONResponse:
 
 @app.post("/api/scan")
 async def api_scan(request: Request) -> JSONResponse:
+    if not _check_api_key(request):
+        return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
     body = await request.json()
     repo_url = body.get("repo_url", "")
     cve_id = body.get("cve_id")
     if not repo_url:
         return JSONResponse({"error": "repo_url is required"}, status_code=400)
+    # Validate URL at the API boundary (P0 fix — prevent SSRF)
+    from sentinel.sanitize import validate_url
+    try:
+        repo_url = validate_url(repo_url)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     if cve_id:
         cve_id = cve_id.upper()
         if not re.match(r"^CVE-\d{4}-\d{4,}$", cve_id):
@@ -319,8 +363,13 @@ async def teams_webhook(request: Request) -> Response:
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) -> Response:
     """Handle Telegram bot webhook updates."""
-    from sentinel.integrations.telegram import parse_update, send_message, help_text, cve_keyboard, answer_callback
+    from sentinel.integrations.telegram import parse_update, send_message, help_text, cve_keyboard, answer_callback, verify_secret_token
     from sentinel.formatters import format_telegram_md, format_telegram_scan_md
+
+    # Verify Telegram webhook secret token
+    secret_token = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not verify_secret_token(secret_token):
+        return JSONResponse({"error": "Invalid secret token"}, status_code=401)
 
     data = await request.json()
     parsed = parse_update(data)

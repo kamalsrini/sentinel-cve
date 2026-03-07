@@ -5,6 +5,7 @@ All user input MUST pass through these validators before processing.
 
 from __future__ import annotations
 
+import os
 import re
 import logging
 from urllib.parse import urlparse
@@ -25,8 +26,12 @@ _ALLOWED_GIT_HOSTS = {
     "github.com",
     "gitlab.com",
     "bitbucket.org",
-    "gitlab.example.com",  # Self-hosted GitLab placeholder
 }
+
+# Additional hosts can be configured via environment variable
+_extra_hosts = os.environ.get("SENTINEL_ALLOWED_GIT_HOSTS", "")
+if _extra_hosts:
+    _ALLOWED_GIT_HOSTS.update(h.strip() for h in _extra_hosts.split(",") if h.strip())
 
 # Patterns that look like secrets/tokens
 _SECRET_PATTERNS = [
